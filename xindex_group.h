@@ -89,7 +89,8 @@ class alignas(CACHELINE_SIZE) Group {
   const key_t &get_pivot();
 
   inline result_t get(const key_t &key, val_t &val);
-  inline result_t put(const key_t &key, const val_t &val);
+  inline result_t put(const key_t &key, const val_t &val,
+                      const uint32_t worker_id);
   inline result_t remove(const key_t &key);
   inline size_t scan(const key_t &begin, const size_t n,
                      std::vector<std::pair<key_t, val_t>> &result);
@@ -112,7 +113,8 @@ class alignas(CACHELINE_SIZE) Group {
   inline size_t locate_model(const key_t &key);
 
   inline bool get_from_array(const key_t &key, val_t &val);
-  inline result_t update_to_array(const key_t &key, const val_t &val);
+  inline result_t update_to_array(const key_t &key, const val_t &val,
+                                  const uint32_t worker_id);
   inline bool remove_from_array(const key_t &key);
 
   inline size_t get_pos_from_array(const key_t &key);

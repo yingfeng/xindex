@@ -75,7 +75,7 @@ inline bool XIndex<key_t, val_t, seq>::put(const key_t &key, const val_t &val,
                                            const uint32_t worker_id) {
   result_t res;
   rcu_progress(worker_id);
-  while ((res = root->put(key, val)) == result_t::retry) {
+  while ((res = root->put(key, val, worker_id)) == result_t::retry) {
     rcu_progress(worker_id);
   }
   return res == result_t::ok;
@@ -168,8 +168,8 @@ void *XIndex<key_t, val_t, seq>::background(void *this_) {
       index.root = old_root->create_new_root();
       memory_fence();
       rcu_barrier();
-      delete old_root;
       index.root->trim_root();
+      delete old_root;
 
       double avg_group_error = 0, max_group_error = 0;
       for (size_t group_i = 0; group_i < index.root->group_n; group_i++) {

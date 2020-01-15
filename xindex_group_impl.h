@@ -87,10 +87,10 @@ inline result_t Group<key_t, val_t, seq, max_model_n>::get(const key_t &key,
 }
 
 template <class key_t, class val_t, bool seq, size_t max_model_n>
-inline result_t Group<key_t, val_t, seq, max_model_n>::put(const key_t &key,
-                                                           const val_t &val) {
+inline result_t Group<key_t, val_t, seq, max_model_n>::put(
+    const key_t &key, const val_t &val, const uint32_t worker_id) {
   result_t res;
-  res = update_to_array(key, val);
+  res = update_to_array(key, val, worker_id);
   if (res == result_t::ok || res == result_t::retry) {
     return res;
   }
@@ -406,7 +406,7 @@ inline bool Group<key_t, val_t, seq, max_model_n>::get_from_array(
 
 template <class key_t, class val_t, bool seq, size_t max_model_n>
 inline result_t Group<key_t, val_t, seq, max_model_n>::update_to_array(
-    const key_t &key, const val_t &val) {
+    const key_t &key, const val_t &val, const uint32_t worker_id) {
   if (seq) {
     seq_lock();
     size_t pos = get_pos_from_array(key);
@@ -423,22 +423,30 @@ inline result_t Group<key_t, val_t, seq, max_model_n>::update_to_array(
           return result_t::retry;
         }
 
-        record_t *prev_data = nullptr;
-        UNUSED(prev_data);
         if ((int32_t)array_size == capacity) {
+          record_t *prev_data = nullptr;
           capacity = array_size * seq_insert_reserve_factor;
           record_t *new_data = new record_t[capacity]();
           memcpy(new_data, data, array_size * sizeof(record_t));
           prev_data = data;
           data = new_data;
-          // TODO free prev_data
-        }
 
-        data[pos].first = key;
-        data[pos].second = wrapped_val_t(val);
-        array_size++;
-        seq_unlock();
-        return result_t::ok;
+          data[pos].first = key;
+          data[pos].second = wrapped_val_t(val);
+          array_size++;
+          seq_unlock();
+
+          rcu_barrier(worker_id);
+          memory_fence();
+          delete prev_data;
+          return result_t::ok;
+        } else {
+          data[pos].first = key;
+          data[pos].second = wrapped_val_t(val);
+          array_size++;
+          seq_unlock();
+          return result_t::ok;
+        }
       } else {
         seq_unlock();
         return result_t::failed;

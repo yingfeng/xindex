@@ -171,6 +171,7 @@ void *run_fg(void *param) {
 
   COUT_THIS("[micro] Worker" << thread_id << " Ready.");
   size_t query_i = 0, insert_i = op_keys.size() / 2, delete_i = 0, update_i = 0;
+  // exsiting keys fall within range [delete_i, insert_i)
   ready_threads++;
   volatile bool res = false;
   uint64_t dummy_value = 1234;
@@ -210,9 +211,10 @@ void *run_fg(void *param) {
       }
     } else {  // scan
       std::vector<std::pair<index_key_t, uint64_t>> results;
-      table->scan(op_keys[query_i], 10, results, 0);
+      table->scan(op_keys[(query_i + delete_i) % op_keys.size()], 10, results,
+                  thread_id);
       query_i++;
-      if (unlikely(query_i == op_keys.size())) {
+      if (unlikely(query_i == op_keys.size() / 2)) {
         query_i = 0;
       }
     }

@@ -195,9 +195,9 @@ inline result_t Root<key_t, val_t, seq>::get(const key_t &key, val_t &val) {
  * Root::put
  */
 template <class key_t, class val_t, bool seq>
-inline result_t Root<key_t, val_t, seq>::put(const key_t &key,
-                                             const val_t &val) {
-  return locate_group(key)->put(key, val);
+inline result_t Root<key_t, val_t, seq>::put(const key_t &key, const val_t &val,
+                                             const uint32_t worker_id) {
+  return locate_group(key)->put(key, val, worker_id);
 }
 
 /*
