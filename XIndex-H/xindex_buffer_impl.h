@@ -15,9 +15,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * For more about XIndex, visit:
- *     https://ppopp20.sigplan.org/details/PPoPP-2020-papers/13/XIndex-A-Scalable-Learned-Index-for-Multicore-Data-Storage
  */
 
 #include <cstdint>
@@ -59,7 +56,7 @@ inline bool AltBtreeBuffer<key_t, val_t>::get(const key_t &key, val_t &val) {
   while (true) {
     int slot = leaf_ptr->find_first_larger_than_or_equal_to(key);
     bool res = (slot < leaf_ptr->key_n && leaf_ptr->keys[slot] == key)
-                   ? leaf_ptr->vals[slot].read_ignoring_ptr(val)
+                   ? leaf_ptr->vals[slot].read(val)
                    : false;
     memory_fence();
     bool locked = leaf_ptr->locked == 1;
@@ -84,12 +81,21 @@ inline bool AltBtreeBuffer<key_t, val_t>::get(const key_t &key, val_t &val) {
 }
 
 template <class key_t, class val_t>
+inline void AltBtreeBuffer<key_t, val_t>::replace_pointer(const key_t &key) {
+  leaf_t *leaf_ptr = locate_leaf_locked(key);
+  int slot = leaf_ptr->find_first_larger_than_or_equal_to(key);
+  if (leaf_ptr->vals[slot].is_ptr(leaf_ptr->vals[slot].status))
+    leaf_ptr->vals[slot].replace_pointer();
+  leaf_ptr->unlock();
+}
+
+template <class key_t, class val_t>
 inline bool AltBtreeBuffer<key_t, val_t>::update(const key_t &key,
                                                  const val_t &val) {
   leaf_t *leaf_ptr = locate_leaf_locked(key);
   int slot = leaf_ptr->find_first_larger_than_or_equal_to(key);
   bool res = (slot < leaf_ptr->key_n && leaf_ptr->keys[slot] == key)
-                 ? leaf_ptr->vals[slot].update_ignoring_ptr(val)
+                 ? leaf_ptr->vals[slot].update(val)
                  : false;
   // no version changed
   leaf_ptr->unlock();
@@ -104,13 +110,21 @@ inline void AltBtreeBuffer<key_t, val_t>::insert(const key_t &key,
 }
 
 template <class key_t, class val_t>
+inline void AltBtreeBuffer<key_t, val_t>::insert_ptr(const key_t &key,
+                                                     atomic_val_t *val_ptr) {
+  leaf_t *leaf_ptr = locate_leaf_locked(key);
+  insert_leaf_ptr(key, val_ptr, leaf_ptr);  // lock is released within
+}
+
+template <class key_t, class val_t>
 inline bool AltBtreeBuffer<key_t, val_t>::remove(const key_t &key) {
   leaf_t *leaf_ptr = locate_leaf_locked(key);
   int slot = leaf_ptr->find_first_larger_than_or_equal_to(key);
   bool res = (slot < leaf_ptr->key_n && leaf_ptr->keys[slot] == key)
-                 ? leaf_ptr->vals[slot].remove_ignoring_ptr()
+                 ? leaf_ptr->vals[slot].remove()
                  : false;
   // no version changed
+  if (res) size_est--;
   leaf_ptr->unlock();
   return res;
 }
@@ -213,7 +227,7 @@ void AltBtreeBuffer<key_t, val_t>::insert_leaf(const key_t &key,
   // first try to update inplace (without modifying mem layout)
   int slot = target->find_first_larger_than_or_equal_to(key);
   if (slot < target->key_n && target->keys[slot] == key) {
-    if (target->vals[slot].update_ignoring_ptr(val)) {
+    if (target->vals[slot].update(val)) {
       memory_fence();
       target->unlock();  // didn't insert anything
       return;
@@ -244,6 +258,33 @@ void AltBtreeBuffer<key_t, val_t>::insert_leaf(const key_t &key,
     return;
   } else {
     split_n_insert_leaf(key, val, slot, target);
+    size_est++;
+  }
+}
+
+template <class key_t, class val_t>
+void AltBtreeBuffer<key_t, val_t>::insert_leaf_ptr(const key_t &key,
+                                                   atomic_val_t *val_ptr,
+                                                   leaf_t *target) {
+  // first try to update inplace (without modifying mem layout)
+  int slot = target->find_first_larger_than_or_equal_to(key);
+
+  // can't update inplace/insert by overwriting
+  if (!target->is_full()) {
+    target->move_keys_backward(slot, 1);
+    target->move_vals_backward(slot, 1);
+    target->keys[slot] = key;
+    target->vals[slot] = atomic_val_t(val_ptr);
+    target->key_n++;
+
+    memory_fence();
+    target->version++;
+    memory_fence();
+    target->unlock();
+    size_est++;
+    return;
+  } else {
+    split_n_insert_leaf(key, val_ptr, slot, target);
     size_est++;
   }
 }
@@ -287,6 +328,275 @@ void AltBtreeBuffer<key_t, val_t>::split_n_insert_leaf(const key_t &insert_key,
 
     node_ptr->keys[slot] = insert_key;
     ((leaf_t *)node_ptr)->vals[slot] = atomic_val_t(val);
+
+    sib_ptr->key_n = node_ptr->key_n - mid;
+    node_ptr->key_n = mid + 1;
+  }
+  memory_fence();  // sibling needs to have right data before visible
+  ((leaf_t *)sib_ptr)->next = ((leaf_t *)node_ptr)->next;
+  ((leaf_t *)node_ptr)->next = (leaf_t *)sib_ptr;
+
+  assert(sib_ptr->is_leaf);
+  assert(sib_ptr->locked);
+  assert(node_ptr->is_leaf);
+  assert(node_ptr->locked);
+  assert(sib_ptr->key_n + node_ptr->key_n == alt_buf_fanout);
+  assert(sib_ptr->keys[0] > node_ptr->keys[node_ptr->key_n - 1]);
+  for (int child_i = 0; child_i < node_ptr->key_n - 1; child_i++) {
+    assert(node_ptr->keys[child_i] < node_ptr->keys[child_i + 1]);
+  }
+  for (int child_i = 0; child_i < sib_ptr->key_n - 1; child_i++) {
+    assert(sib_ptr->keys[child_i] < sib_ptr->keys[child_i + 1]);
+  }
+  key_t split_key = sib_ptr->keys[0];
+
+  while (true) {
+    // lock the right parent
+    internal_t *parent_ptr;
+    while (true) {
+      parent_ptr = node_ptr->parent;
+      if (!parent_ptr) {
+        break;
+      }
+      parent_ptr->lock();
+      if (parent_ptr != node_ptr->parent) {  // when parent is split by others
+        parent_ptr->node_t::unlock();
+      } else {
+        break;
+      }
+    }
+
+    if (parent_ptr == nullptr) {
+      parent_ptr = allocate_internal();
+      parent_ptr->lock();
+      parent_ptr->is_leaf = false;
+
+      parent_ptr->keys[0] = split_key;
+      ((internal_t *)parent_ptr)->children[0] = node_ptr;
+      ((internal_t *)parent_ptr)->children[1] = sib_ptr;
+      parent_ptr->key_n = 1;
+
+      for (int child_i = 0; child_i < parent_ptr->key_n - 1; child_i++) {
+        assert(parent_ptr->keys[child_i] < parent_ptr->keys[child_i + 1]);
+      }
+
+      node_ptr->parent = parent_ptr;
+      sib_ptr->parent = parent_ptr;
+      root = parent_ptr;
+      memory_fence();
+      parent_ptr->version++;
+      node_ptr->version++;
+      sib_ptr->version++;
+      memory_fence();
+      parent_ptr->node_t::unlock();
+      node_ptr->node_t::unlock();
+      sib_ptr->node_t::unlock();
+      return;
+    } else if (!parent_ptr->is_full()) {
+      int slot = parent_ptr->find_first_larger_than(split_key);
+      assert(parent_ptr->find_first_larger_than(split_key) ==
+             parent_ptr->find_first_larger_than_or_equal_to(split_key));
+
+      parent_ptr->move_keys_backward(slot, 1);
+      ((internal_t *)parent_ptr)->move_children_backward(slot + 1, 1);
+      parent_ptr->keys[slot] = split_key;
+      ((internal_t *)parent_ptr)->children[slot + 1] = sib_ptr;
+
+      parent_ptr->key_n++;
+      sib_ptr->parent = parent_ptr;
+
+      assert(parent_ptr->is_leaf == false);
+      assert(parent_ptr->locked);
+      assert(parent_ptr->key_n <= alt_buf_fanout - 1);
+
+      for (int child_i = 0; child_i < parent_ptr->key_n - 1; child_i++) {
+        assert(parent_ptr->keys[child_i] < parent_ptr->keys[child_i + 1]);
+      }
+      for (int child_i = 0; child_i < parent_ptr->key_n; child_i++) {
+        assert(((internal_t *)parent_ptr)
+                   ->children[child_i]
+                   ->keys[((internal_t *)parent_ptr)->children[child_i]->key_n -
+                          1] < parent_ptr->keys[child_i]);
+        assert(((internal_t *)parent_ptr)->children[child_i + 1]->keys[0] >=
+               parent_ptr->keys[child_i]);
+      }
+      for (int child_i = 0; child_i < parent_ptr->key_n + 1; child_i++) {
+        assert(((internal_t *)parent_ptr)->children[child_i]->parent ==
+               (internal_t *)parent_ptr);
+      }
+
+      memory_fence();
+      parent_ptr->version++;
+      node_ptr->version++;
+      sib_ptr->version++;
+      memory_fence();
+      parent_ptr->node_t::unlock();
+      node_ptr->node_t::unlock();
+      sib_ptr->node_t::unlock();
+      return;
+    } else {  // recursive split, knock the parent as the new node to split
+      node_t *prev_sib_ptr = sib_ptr;
+      node_t *prev_node_ptr = node_ptr;
+      key_t prev_split_key = split_key;
+
+      node_ptr = parent_ptr;
+      sib_ptr = allocate_internal();
+      sib_ptr->lock();
+      sib_ptr->is_leaf = false;
+
+      int slot = node_ptr->find_first_larger_than(prev_split_key);
+      assert(node_ptr->find_first_larger_than(prev_split_key) ==
+             node_ptr->find_first_larger_than_or_equal_to(prev_split_key));
+      int mid = node_ptr->key_n / 2;
+      if (slot < mid /* if insert to the first node */ &&
+          mid > node_ptr->key_n - (mid + 1) /* and it is larger  */) {
+        mid--;
+      }
+      if (slot == node_ptr->key_n) {  // if insert to the end
+        mid = node_ptr->key_n - 1;    // then split at the end
+      }
+
+      if (slot >= mid) {    // insert to the new sibling
+        if (slot == mid) {  // prev split key will be the new split key
+
+          node_ptr->copy_keys(mid, sib_ptr->keys);
+          ((internal_t *)node_ptr)
+              ->copy_children(mid + 1, ((internal_t *)sib_ptr)->children + 1);
+          ((internal_t *)sib_ptr)->children[0] = prev_sib_ptr;
+
+          split_key = prev_split_key;
+        } else {  // mid key will be new split key
+
+          node_ptr->copy_keys(mid + 1, slot, sib_ptr->keys);
+          node_ptr->copy_keys(slot, sib_ptr->keys + slot - mid);
+          ((internal_t *)node_ptr)
+              ->copy_children(mid + 1, slot + 1,
+                              ((internal_t *)sib_ptr)->children);
+          ((internal_t *)node_ptr)
+              ->copy_children(
+                  slot + 1, ((internal_t *)sib_ptr)->children + slot - mid + 1);
+          sib_ptr->keys[slot - mid - 1] = prev_split_key;
+          ((internal_t *)sib_ptr)->children[slot - mid] = prev_sib_ptr;
+
+          split_key = node_ptr->keys[mid];
+        }
+
+        sib_ptr->key_n = node_ptr->key_n - mid;
+        node_ptr->key_n = mid;
+
+      } else {  // insert to old leaf
+
+        node_ptr->copy_keys(mid + 1, sib_ptr->keys);
+        ((internal_t *)node_ptr)
+            ->copy_children(mid + 1, ((internal_t *)sib_ptr)->children);
+
+        split_key = node_ptr->keys[mid];  // copy it before moving
+
+        node_ptr->move_keys_backward(slot, mid, 1);
+        ((internal_t *)node_ptr)->move_children_backward(slot + 1, mid + 1, 1);
+
+        node_ptr->keys[slot] = prev_split_key;
+        ((internal_t *)node_ptr)->children[slot + 1] = prev_sib_ptr;
+
+        prev_sib_ptr->parent = (internal_t *)node_ptr;
+        sib_ptr->key_n = node_ptr->key_n - mid - 1;
+        node_ptr->key_n = mid + 1;
+      }
+      for (int child_i = 0; child_i < sib_ptr->key_n + 1; child_i++) {
+        ((internal_t *)sib_ptr)->children[child_i]->parent =
+            (internal_t *)sib_ptr;
+      }
+
+      memory_fence();
+      prev_node_ptr->version++;
+      prev_sib_ptr->version++;
+      memory_fence();
+      prev_node_ptr->node_t::unlock();
+      prev_sib_ptr->node_t::unlock();
+
+      assert(sib_ptr->is_leaf == false);
+      assert(sib_ptr->locked);
+      assert(node_ptr->is_leaf == false);
+      assert(node_ptr->locked);
+      assert(sib_ptr->key_n + node_ptr->key_n == alt_buf_fanout - 1);
+      assert(sib_ptr->keys[0] > node_ptr->keys[node_ptr->key_n - 1]);
+
+      for (int child_i = 0; child_i < node_ptr->key_n - 1; child_i++) {
+        assert(node_ptr->keys[child_i] < node_ptr->keys[child_i + 1]);
+      }
+      for (int child_i = 0; child_i < node_ptr->key_n; child_i++) {
+        assert(
+            ((internal_t *)node_ptr)
+                ->children[child_i]
+                ->keys[((internal_t *)node_ptr)->children[child_i]->key_n - 1] <
+            node_ptr->keys[child_i]);
+        assert(((internal_t *)node_ptr)->children[child_i + 1]->keys[0] >=
+               node_ptr->keys[child_i]);
+      }
+      for (int child_i = 0; child_i < node_ptr->key_n + 1; child_i++) {
+        assert(((internal_t *)node_ptr)->children[child_i]->parent ==
+               (internal_t *)node_ptr);
+      }
+
+      for (int child_i = 0; child_i < sib_ptr->key_n - 1; child_i++) {
+        assert(sib_ptr->keys[child_i] < sib_ptr->keys[child_i + 1]);
+      }
+      for (int child_i = 0; child_i < sib_ptr->key_n; child_i++) {
+        assert(
+            ((internal_t *)sib_ptr)
+                ->children[child_i]
+                ->keys[((internal_t *)sib_ptr)->children[child_i]->key_n - 1] <
+            sib_ptr->keys[child_i]);
+        assert(((internal_t *)sib_ptr)->children[child_i + 1]->keys[0] >=
+               sib_ptr->keys[child_i]);
+      }
+      for (int child_i = 0; child_i < sib_ptr->key_n + 1; child_i++) {
+        assert(((internal_t *)sib_ptr)->children[child_i]->parent ==
+               (internal_t *)sib_ptr);
+      }
+    }
+  }
+}
+
+template <class key_t, class val_t>
+void AltBtreeBuffer<key_t, val_t>::split_n_insert_leaf(const key_t &insert_key,
+                                                       atomic_val_t *val_ptr,
+                                                       int slot,
+                                                       leaf_t *target) {
+  node_t *node_ptr = target;
+  node_t *sib_ptr = allocate_leaf();
+  sib_ptr->lock();
+  sib_ptr->is_leaf = true;
+
+  int mid = node_ptr->key_n / 2;
+  if (slot >= mid /* if insert to the second node */ &&
+      mid < node_ptr->key_n - mid /* and it is larger  */) {
+    mid++;
+  }
+  if (slot == node_ptr->key_n) {  // if insert to the end
+    mid = node_ptr->key_n;        // then split at the end
+  }
+
+  if (slot >= mid) {  // insert to the new sibling
+    node_ptr->copy_keys(mid, slot, sib_ptr->keys);
+    node_ptr->copy_keys(slot, sib_ptr->keys + slot - mid + 1);
+    ((leaf_t *)node_ptr)->copy_vals(mid, slot, ((leaf_t *)sib_ptr)->vals);
+    ((leaf_t *)node_ptr)
+        ->copy_vals(slot, ((leaf_t *)sib_ptr)->vals + slot - mid + 1);
+
+    sib_ptr->keys[slot - mid] = insert_key;
+    ((leaf_t *)sib_ptr)->vals[slot - mid] = atomic_val_t(val_ptr);
+
+    sib_ptr->key_n = node_ptr->key_n - mid + 1;
+    node_ptr->key_n = mid;
+  } else {  // insert to old leaf
+    node_ptr->copy_keys(mid, sib_ptr->keys);
+    ((leaf_t *)node_ptr)->copy_vals(mid, ((leaf_t *)sib_ptr)->vals);
+    node_ptr->move_keys_backward(slot, mid, 1);
+    ((leaf_t *)node_ptr)->move_vals_backward(slot, mid, 1);
+
+    node_ptr->keys[slot] = insert_key;
+    ((leaf_t *)node_ptr)->vals[slot] = atomic_val_t(val_ptr);
 
     sib_ptr->key_n = node_ptr->key_n - mid;
     node_ptr->key_n = mid + 1;
@@ -702,7 +1012,7 @@ AltBtreeBuffer<key_t, val_t>::DataSource::DataSource(key_t begin,
     int key_n = leaf_ptr->key_n;
     pos = 0;
     for (int i = slot; i < key_n; i++) {
-      if (leaf_ptr->vals[i].read_ignoring_ptr(vals[pos])) {
+      if (leaf_ptr->vals[i].read(vals[pos])) {
         keys[pos] = leaf_ptr->keys[i];
         pos++;
       }
@@ -752,7 +1062,7 @@ void AltBtreeBuffer<key_t, val_t>::DataSource::advance_to_next_valid() {
         int key_n = leaf_ptr->key_n;
         pos = 0;
         for (int i = 0; i < key_n; i++) {
-          if (leaf_ptr->vals[i].read_ignoring_ptr(vals[pos])) {
+          if (leaf_ptr->vals[i].read(vals[pos])) {
             keys[pos] = leaf_ptr->keys[i];
             pos++;
           }

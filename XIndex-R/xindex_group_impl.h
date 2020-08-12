@@ -373,7 +373,7 @@ inline void Group<key_t, val_t, seq, max_model_n>::compact_phase_2() {
 
 template <class key_t, class val_t, bool seq, size_t max_model_n>
 void Group<key_t, val_t, seq, max_model_n>::free_data() {
-  delete data;
+  delete[] data;
 }
 template <class key_t, class val_t, bool seq, size_t max_model_n>
 void Group<key_t, val_t, seq, max_model_n>::free_buffer() {
@@ -438,7 +438,7 @@ inline result_t Group<key_t, val_t, seq, max_model_n>::update_to_array(
 
           rcu_barrier(worker_id);
           memory_fence();
-          delete prev_data;
+          delete[] prev_data;
           return result_t::ok;
         } else {
           data[pos].first = key;
