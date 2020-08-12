@@ -1,5 +1,5 @@
 /*
- * The code is part of the XIndex project.
+ * The code is part of the SIndex project.
  *
  *    Copyright (C) 2020 Institute of Parallel and Distributed Systems (IPADS),
  * Shanghai Jiao Tong University. All rights reserved.
@@ -16,14 +16,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * For more about XIndex, visit:
- *     https://ppopp20.sigplan.org/details/PPoPP-2020-papers/13/XIndex-A-Scalable-Learned-Index-for-Multicore-Data-Storage
  */
 
 #include <getopt.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <memory>
@@ -36,10 +35,11 @@
 #include "xindex_impl.h"
 
 struct alignas(CACHELINE_SIZE) FGParam;
-class Key;
+template <size_t len>
+class StrKey;
 
 typedef FGParam fg_param_t;
-typedef Key index_key_t;
+typedef StrKey<64> index_key_t;
 typedef xindex::XIndex<index_key_t, uint64_t> xindex_t;
 
 inline void prepare_xindex(xindex_t *&table);
@@ -72,42 +72,83 @@ struct alignas(CACHELINE_SIZE) FGParam {
   uint32_t thread_id;
 };
 
-class Key {
-  typedef std::array<double, 1> model_key_t;
+template <size_t len>
+class StrKey {
+  typedef std::array<double, len> model_key_t;
 
  public:
-  static constexpr size_t model_key_size() { return 1; }
-  static Key max() {
-    static Key max_key(std::numeric_limits<uint64_t>::max());
+  static constexpr size_t model_key_size() { return len; }
+
+  static StrKey max() {
+    static StrKey max_key;
+    memset(&max_key.buf, 255, len);
     return max_key;
   }
-  static Key min() {
-    static Key min_key(std::numeric_limits<uint64_t>::min());
+  static StrKey min() {
+    static StrKey min_key;
+    memset(&min_key.buf, 0, len);
     return min_key;
   }
 
-  Key() : key(0) {}
-  Key(uint64_t key) : key(key) {}
-  Key(const Key &other) { key = other.key; }
-  Key &operator=(const Key &other) {
-    key = other.key;
+  StrKey() { memset(&buf, 0, len); }
+  StrKey(uint64_t key) { COUT_N_EXIT("str key no uint64"); }
+  StrKey(const std::string &s) {
+    memset(&buf, 0, len);
+    memcpy(&buf, s.data(), s.size());
+  }
+  StrKey(const StrKey &other) { memcpy(&buf, &other.buf, len); }
+  StrKey &operator=(const StrKey &other) {
+    memcpy(&buf, &other.buf, len);
     return *this;
   }
 
   model_key_t to_model_key() const {
     model_key_t model_key;
-    model_key[0] = key;
+    for (size_t i = 0; i < len; i++) {
+      model_key[i] = buf[i];
+    }
     return model_key;
   }
 
-  friend bool operator<(const Key &l, const Key &r) { return l.key < r.key; }
-  friend bool operator>(const Key &l, const Key &r) { return l.key > r.key; }
-  friend bool operator>=(const Key &l, const Key &r) { return l.key >= r.key; }
-  friend bool operator<=(const Key &l, const Key &r) { return l.key <= r.key; }
-  friend bool operator==(const Key &l, const Key &r) { return l.key == r.key; }
-  friend bool operator!=(const Key &l, const Key &r) { return l.key != r.key; }
+  void get_model_key(size_t begin_f, size_t l, double *target) const {
+    for (size_t i = 0; i < l; i++) {
+      target[i] = buf[i + begin_f];
+    }
+  }
 
-  uint64_t key;
+  bool less_than(const StrKey &other, size_t begin_i, size_t l) const {
+    return memcmp(buf + begin_i, other.buf + begin_i, l) < 0;
+  }
+
+  friend bool operator<(const StrKey &l, const StrKey &r) {
+    return memcmp(&l.buf, &r.buf, len) < 0;
+  }
+  friend bool operator>(const StrKey &l, const StrKey &r) {
+    return memcmp(&l.buf, &r.buf, len) > 0;
+  }
+  friend bool operator>=(const StrKey &l, const StrKey &r) {
+    return memcmp(&l.buf, &r.buf, len) >= 0;
+  }
+  friend bool operator<=(const StrKey &l, const StrKey &r) {
+    return memcmp(&l.buf, &r.buf, len) <= 0;
+  }
+  friend bool operator==(const StrKey &l, const StrKey &r) {
+    return memcmp(&l.buf, &r.buf, len) == 0;
+  }
+  friend bool operator!=(const StrKey &l, const StrKey &r) {
+    return memcmp(&l.buf, &r.buf, len) != 0;
+  }
+
+  friend std::ostream &operator<<(std::ostream &os, const StrKey &key) {
+    os << "key [" << std::hex;
+    for (size_t i = 0; i < sizeof(StrKey); i++) {
+      os << "0x" << key.buf[i] << " ";
+    }
+    os << "] (as byte)" << std::dec;
+    return os;
+  }
+
+  uint8_t buf[len];
 } PACKED;
 
 int main(int argc, char **argv) {
@@ -122,18 +163,26 @@ inline void prepare_xindex(xindex_t *&table) {
   // prepare data
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<int64_t> rand_int64(
-      0, std::numeric_limits<int64_t>::max());
+  std::uniform_int_distribution<int64_t> rand_int8(
+      0, std::numeric_limits<uint8_t>::max());
 
   exist_keys.reserve(table_size);
   for (size_t i = 0; i < table_size; ++i) {
-    exist_keys.push_back(index_key_t(rand_int64(gen)));
+    index_key_t k;
+    for (size_t i = 0; i < sizeof(index_key_t); ++i) {
+      k.buf[i] = (uint8_t)rand_int8(gen);
+    }
+    exist_keys.push_back(k);
   }
 
   if (insert_ratio > 0) {
     non_exist_keys.reserve(table_size);
     for (size_t i = 0; i < table_size; ++i) {
-      non_exist_keys.push_back(index_key_t(rand_int64(gen)));
+      index_key_t k;
+      for (size_t i = 0; i < sizeof(index_key_t); ++i) {
+        k.buf[i] = (uint8_t)rand_int8(gen);
+      }
+      non_exist_keys.push_back(k);
     }
   }
 
@@ -296,6 +345,9 @@ inline void parse_args(int argc, char **argv) {
       {"xindex-group-err-tolerance", required_argument, 0, 'm'},
       {"xindex-buf-size-bound", required_argument, 0, 'n'},
       {"xindex-buf-compact-threshold", required_argument, 0, 'o'},
+      {"xindex-partial-len", required_argument, 0, 'p'},
+      {"xindex-forward-step", required_argument, 0, 'q'},
+      {"xindex-backward-step", required_argument, 0, 'r'},
       {0, 0, 0, 0}};
   std::string ops = "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:";
   int option_index = 0;
@@ -369,6 +421,19 @@ inline void parse_args(int argc, char **argv) {
         xindex::config.buffer_compact_threshold = strtol(optarg, NULL, 10);
         INVARIANT(xindex::config.buffer_compact_threshold > 0);
         break;
+      case 'p':
+        xindex::config.partial_len_bound = strtol(optarg, NULL, 10);
+        INVARIANT(xindex::config.partial_len_bound > 0);
+        break;
+      case 'q':
+        xindex::config.forward_step = strtol(optarg, NULL, 10);
+        INVARIANT(xindex::config.forward_step > 0);
+        break;
+      case 'r':
+        xindex::config.backward_step = strtol(optarg, NULL, 10);
+        INVARIANT(xindex::config.backward_step > 0);
+        break;
+
       default:
         abort();
     }
@@ -390,4 +455,7 @@ inline void parse_args(int argc, char **argv) {
   COUT_VAR(xindex::config.buffer_size_bound);
   COUT_VAR(xindex::config.buffer_size_tolerance);
   COUT_VAR(xindex::config.buffer_compact_threshold);
+  COUT_VAR(xindex::config.partial_len_bound);
+  COUT_VAR(xindex::config.forward_step);
+  COUT_VAR(xindex::config.backward_step);
 }

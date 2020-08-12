@@ -1,5 +1,5 @@
 /*
- * The code is part of the XIndex project.
+ * The code is part of the SIndex project.
  *
  *    Copyright (C) 2020 Institute of Parallel and Distributed Systems (IPADS),
  * Shanghai Jiao Tong University. All rights reserved.
@@ -16,14 +16,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * For more about XIndex, visit:
- *     https://ppopp20.sigplan.org/details/PPoPP-2020-papers/13/XIndex-A-Scalable-Learned-Index-for-Multicore-Data-Storage
  */
 
 #include "xindex.h"
 #include "xindex_buffer_impl.h"
 #include "xindex_group_impl.h"
-#include "xindex_model_impl.h"
+#include "xindex_model.h"
 #include "xindex_root_impl.h"
 
 #if !defined(XINDEX_IMPL_H)
@@ -130,7 +128,7 @@ void *XIndex<key_t, val_t, seq>::background(void *this_) {
   }
 
   while (index.bg_running) {
-    DEBUG_THIS("--- [bg] new round of structure update");
+    DEBUG_THIS("------ [bg] new round of structure update");
 
     for (size_t bg_i = 0; bg_i < bg_num; bg_i++) {
       info[bg_i].started = true;
@@ -173,15 +171,14 @@ void *XIndex<key_t, val_t, seq>::background(void *this_) {
 
       double avg_group_error = 0, max_group_error = 0;
       for (size_t group_i = 0; group_i < index.root->group_n; group_i++) {
-        avg_group_error += index.root->groups[group_i].second->mean_error;
-        if (index.root->groups[group_i].second->mean_error > max_group_error) {
-          max_group_error = index.root->groups[group_i].second->mean_error;
+        double err = index.root->get_group_ptr(group_i)->get_mean_error();
+        avg_group_error += err;
+        if (err > max_group_error) {
+          max_group_error = err;
         }
       }
       avg_group_error /= index.root->group_n;
       DEBUG_THIS("--- [root] group_n: " << index.root->group_n);
-      DEBUG_THIS("--- [root] rmi_2nd_stage_model_n: "
-                 << index.root->rmi_2nd_stage_model_n);
       DEBUG_THIS("--- [root] avg_group_error: " << avg_group_error);
       DEBUG_THIS("--- [root] max_group_error: " << max_group_error);
     }

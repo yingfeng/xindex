@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.5)
-project (XIndex)
+project (SIndex)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,6 +31,7 @@ link_libraries(jemalloc)
 include_directories(${MKL_INCLUDE_DIRECTORY})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
+# add_compile_options(-Wall -fmax-errors=5 -march=native -mtune=native)
 add_compile_options(-Wall -fmax-errors=5 -faligned-new -march=native -mtune=native)
 
 # microbench

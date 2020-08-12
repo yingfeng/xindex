@@ -1,5 +1,5 @@
 /*
- * The code is part of the XIndex project.
+ * The code is part of the SIndex project.
  *
  *    Copyright (C) 2020 Institute of Parallel and Distributed Systems (IPADS),
  * Shanghai Jiao Tong University. All rights reserved.
@@ -31,10 +31,6 @@ namespace xindex {
 
 template <class key_t, class val_t, bool seq, size_t max_model_n = 4>
 class alignas(CACHELINE_SIZE) Group {
-  struct ModelInfo;
-
-  typedef LinearModel<key_t> linear_model_t;
-  typedef ModelInfo model_info_t;
   typedef AtomicVal<val_t> atomic_val_t;
   typedef atomic_val_t wrapped_val_t;
   typedef AltBtreeBuffer<key_t, val_t> buffer_t;
@@ -45,11 +41,6 @@ class alignas(CACHELINE_SIZE) Group {
   friend class XIndex;
   template <class key_tt, class val_tt, bool sequential>
   friend class Root;
-
-  struct ModelInfo {
-    key_t pivot;
-    linear_model_t model;
-  };
 
   struct ArrayDataSource {
     ArrayDataSource(record_t *data, uint32_t array_size, uint32_t pos);
@@ -86,7 +77,6 @@ class alignas(CACHELINE_SIZE) Group {
   void init(const typename std::vector<key_t>::const_iterator &keys_begin,
             const typename std::vector<val_t>::const_iterator &vals_begin,
             uint32_t model_n, uint32_t array_size);
-  const key_t &get_pivot();
 
   inline result_t get(const key_t &key, val_t &val);
   inline result_t put(const key_t &key, const val_t &val,
@@ -97,7 +87,8 @@ class alignas(CACHELINE_SIZE) Group {
   inline size_t range_scan(const key_t &begin, const key_t &end,
                            std::vector<std::pair<key_t, val_t>> &result);
 
-  double mean_error_est();
+  double mean_error_est() const;
+  double get_mean_error() const;
   Group *split_model();
   Group *merge_model();
   Group *split_group_pt1();
@@ -133,6 +124,8 @@ class alignas(CACHELINE_SIZE) Group {
   inline bool remove_from_buffer(const key_t &key, buffer_t *buffer);
 
   void init_models(uint32_t model_n);
+  void init_models(uint32_t model_n, size_t p_len, size_t f_len);
+  void init_feature_length();
   inline double train_model(size_t model_i, size_t begin, size_t end);
 
   inline void merge_refs(record_t *&new_data, uint32_t &new_array_size,
@@ -157,20 +150,47 @@ class alignas(CACHELINE_SIZE) Group {
   inline void enable_seq_insert_opt();
   inline void disable_seq_insert_opt();
 
+  inline double *get_model(size_t model_i) const;
+  inline const uint8_t *get_model_pivot(size_t model_i) const;
+  inline void set_model_pivot(size_t model_i, const key_t &key);
+  inline void get_model_error(size_t model_i, int &error_max,
+                              int &error_min) const;
+  inline void set_model_error(size_t model_i, int error_max, int error_min);
+
+  inline void prepare_last(size_t model_i,
+                           const std::vector<double *> &model_keys,
+                           const std::vector<size_t> &positions);
+  inline size_t get_error_bound(size_t model_i,
+                                const std::vector<double *> &model_key_ptrs,
+                                const std::vector<size_t> &positions) const;
+  inline void predict_last(size_t model_i, const key_t &key, size_t &pos,
+                           int &error_min, int &error_max) const;
+  inline size_t predict(size_t model_i, const key_t &key) const;
+  inline size_t predict(size_t model_i, const double *model_key) const;
+  inline bool key_less_than(const uint8_t *k1, const uint8_t *k2,
+                            size_t len) const;
+
   key_t pivot;
   // make array_size atomic because we don't want to acquire lock during `get`.
   // it is okay to obtain a stale (smaller) array_size during `get`.
-  uint32_t array_size;
-  uint16_t model_n = 0;
-  bool buf_frozen = false;
-  Group *next = nullptr;
-  std::array<model_info_t, max_model_n> models;
-  record_t *data = nullptr;
-  buffer_t *buffer = nullptr;
-  buffer_t *buffer_temp = nullptr;
-  double mean_error;
-  int32_t capacity = 0;       // used for seqential insertion
-  volatile uint8_t lock = 0;  // used for seqential insertion
+  uint32_t array_size;              // 4B
+  uint8_t model_n = 0;              // 1B
+  uint8_t prefix_len = 0;           // 1B
+  uint8_t feature_len = 0;          // 1B
+  bool buf_frozen = false;          // 1B
+  record_t *data = nullptr;         // 8B
+  Group *next = nullptr;            // 8B
+  buffer_t *buffer = nullptr;       // 8B
+  buffer_t *buffer_temp = nullptr;  // 8B
+  // used for sequential insertion
+  int32_t capacity = 0;         // 4B
+  uint16_t pos_last_pivot = 0;  // 2B
+  volatile uint8_t lock = 0;    // 1B
+  // model data
+  std::array<uint8_t,
+             (max_model_n - 1) * sizeof(key_t) +
+                 max_model_n * sizeof(double) * (key_t::model_key_size() + 1)>
+      model_info;
 };
 
 }  // namespace xindex

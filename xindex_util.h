@@ -1,5 +1,5 @@
 /*
- * The code is part of the XIndex project.
+ * The code is part of the SIndex project.
  *
  *    Copyright (C) 2020 Institute of Parallel and Distributed Systems (IPADS),
  * Shanghai Jiao Tong University. All rights reserved.
@@ -16,8 +16,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * For more about XIndex, visit:
- *     https://ppopp20.sigplan.org/details/PPoPP-2020-papers/13/XIndex-A-Scalable-Learned-Index-for-Multicore-Data-Storage
  */
 
 #include <atomic>
@@ -34,6 +32,8 @@ namespace xindex {
 static const size_t desired_training_key_n = 10000000;
 static const size_t max_model_n = 4;
 static const size_t seq_insert_reserve_factor = 2;
+static const size_t max_group_model_n = 4;
+static const size_t max_root_model_n = 4;
 
 struct alignas(CACHELINE_SIZE) RCUStatus;
 enum class Result;
@@ -68,6 +68,11 @@ struct IndexConfig {
   double buffer_size_tolerance = 3;
   size_t buffer_compact_threshold = 8;
   size_t worker_n = 0;
+  // greedy grouping related
+  size_t partial_len_bound = 4;
+  size_t forward_step = 550;
+  size_t backward_step = 50;
+  size_t group_min_size = 400;
   std::unique_ptr<rcu_status_t[]> rcu_status;
   volatile bool exited = true;
 };
@@ -142,7 +147,8 @@ struct AtomicVal {
   static const uint64_t pointer_mask = 0x4000000000000000;
 
   val_union_t val;
-  // lock - removed - is_ptr
+  // bool is_ptr : 1, removed : 1;
+  // volatile uint8_t locked;
   volatile uint64_t status;
 
   AtomicVal() : status(0) {}

@@ -1,5 +1,5 @@
 /*
- * The code is part of the XIndex project.
+ * The code is part of the SIndex project.
  *
  *    Copyright (C) 2020 Institute of Parallel and Distributed Systems (IPADS),
  * Shanghai Jiao Tong University. All rights reserved.
@@ -16,8 +16,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * For more about XIndex, visit:
- *     https://ppopp20.sigplan.org/details/PPoPP-2020-papers/13/XIndex-A-Scalable-Learned-Index-for-Multicore-Data-Storage
  */
 #include <unordered_map>
 
@@ -36,159 +34,62 @@ void Root<key_t, val_t, seq>::init(const std::vector<key_t> &keys,
                                    const std::vector<val_t> &vals) {
   INVARIANT(seq == false);
 
-  // try different initial # of groups
+  std::vector<size_t> pivot_indexes;
+  grouping_by_partial_key(keys, config.group_error_bound,
+                          config.partial_len_bound, config.forward_step,
+                          config.backward_step, config.group_min_size,
+                          pivot_indexes);
+
+  group_n = pivot_indexes.size();
   size_t record_n = keys.size();
-  const size_t group_size_to_group_error_experience_ratio = 1000;
-  size_t group_n_trial =
-      record_n /
-      (group_size_to_group_error_experience_ratio * config.group_error_bound);
-
-  size_t max_trial_n = 40, trial_i = 0;
-  double actual_error_at_percentile = 0, max_group_error = 0,
-         avg_group_error = 0;
-
-  std::unordered_map<size_t, double> group_n_tried;
-
-  for (; trial_i < max_trial_n; trial_i++) {
-    group_n_trial = group_n_trial != 0 ? group_n_trial : 1;
-
-    calculate_err(keys, vals, group_n_trial, actual_error_at_percentile,
-                  max_group_error, avg_group_error);
-
-    // stop when we find ping-pong
-    if (group_n_tried.count(group_n_trial) > 0) {
-      size_t best_group_n = group_n_trial;
-      double min_error = actual_error_at_percentile;
-      for (auto iter = group_n_tried.begin(); iter != group_n_tried.end();
-           iter++) {
-        if (iter->second < min_error) {
-          best_group_n = iter->first;
-          min_error = iter->second;
-        }
-      }
-      group_n_trial = best_group_n;
-      actual_error_at_percentile = min_error;
-      DEBUG_THIS(
-          "--- [root] Ping-Pong while finding group_n. Stop at "
-          "group_n="
-          << group_n_trial
-          << ", error_at_percentile=" << actual_error_at_percentile);
-      break;
-    }
-    group_n_tried.emplace(group_n_trial, actual_error_at_percentile);
-
-    if (actual_error_at_percentile > config.group_error_bound) {
-      group_n_trial =
-          group_n_trial * actual_error_at_percentile / config.group_error_bound;
-    } else if (actual_error_at_percentile < config.group_error_bound / 2) {
-      if (group_n_trial == 1) {  // when group_n_trial can't go down anymore
-        break;
-      }
-      // embrace the group_n=0 case
-      if (actual_error_at_percentile == 0 && trial_i == max_trial_n - 1) {
-        break;
-      }
-      group_n_trial = group_n_trial * actual_error_at_percentile /
-                      (config.group_error_bound / 2);
-    } else {
-      break;
-    }
-  }
-
-  // max group_n is keys.size()
-  if (group_n_trial > keys.size()) group_n_trial = keys.size();
-  calculate_err(keys, vals, group_n_trial, actual_error_at_percentile,
-                max_group_error, avg_group_error);
-
-  DEBUG_THIS("--- [root] final group size: "
-             << group_n_trial << " (actual_error_at_percentile="
-             << actual_error_at_percentile << ", max_error=" << max_group_error
-             << ", avg_group_error=" << avg_group_error << ") after " << trial_i
-             << " trial(s)");
-
-  // use the found group_n_trial to initialize groups
-  group_n = group_n_trial;
   groups = std::make_unique<std::pair<key_t, group_t *volatile>[]>(group_n);
-  size_t records_per_group = record_n / group_n;
-  size_t trailing_record_n = record_n - records_per_group * group_n;
-  size_t previous_end_i = 0;
-  for (size_t group_i = 0; group_i < group_n; group_i++) {
-    size_t begin_i = previous_end_i;
-    size_t end_i = previous_end_i + records_per_group;
-    end_i = end_i > record_n ? record_n : end_i;
-    if (trailing_record_n > 0) {
-      end_i++;
-      trailing_record_n--;
-    }
-    previous_end_i = end_i;
-    INVARIANT((group_i == group_n - 1 && end_i == record_n) ||
-              group_i < group_n - 1);
 
-    groups[group_i].first = keys[begin_i];
-    groups[group_i].second = new group_t();
-    groups[group_i].second->init(keys.begin() + begin_i, vals.begin() + begin_i,
-                                 end_i - begin_i);
+  double max_group_error = 0, avg_group_error = 0;
+  double avg_prefix_len = 0, avg_feature_len = 0;
+  size_t feature_begin_i = std::numeric_limits<uint16_t>::max(),
+         max_feature_len = 0;
+
+  for (size_t group_i = 0; group_i < group_n; group_i++) {
+    size_t begin_i = pivot_indexes[group_i];
+    size_t end_i =
+        group_i + 1 == group_n ? record_n : pivot_indexes[group_i + 1];
+
+    set_group_pivot(group_i, keys[begin_i]);
+    group_t *group_ptr = new group_t();
+    group_ptr->init(keys.begin() + begin_i, vals.begin() + begin_i,
+                    end_i - begin_i);
+    set_group_ptr(group_i, group_ptr);
+    assert(group_ptr == get_group_ptr(group_i));
+
+    avg_prefix_len += get_group_ptr(group_i)->prefix_len;
+    avg_feature_len += get_group_ptr(group_i)->feature_len;
+    feature_begin_i =
+        std::min(feature_begin_i, (size_t)groups[group_i].second->prefix_len);
+    max_feature_len =
+        std::max(max_feature_len, (size_t)groups[group_i].second->feature_len);
+    double err = get_group_ptr(group_i)->get_mean_error();
+    max_group_error = std::max(max_group_error, err);
+    avg_group_error += err;
   }
 
   // then decide # of 2nd stage model of root RMI
-  adjust_rmi();
+  adjust_root_model();
 
-  DEBUG_THIS("--- [root] final XIndex Paramater: group_n = "
-             << group_n << ", rmi_2nd_stage_model_n=" << rmi_2nd_stage_model_n);
-}
-
-/*
- * Root::calculate_err
- */
-template <class key_t, class val_t, bool seq>
-void Root<key_t, val_t, seq>::calculate_err(const std::vector<key_t> &keys,
-                                            const std::vector<val_t> &vals,
-                                            size_t group_n_trial,
-                                            double &err_at_percentile,
-                                            double &max_err, double &avg_err) {
-  double access_percentage = 0.9;
-  size_t record_n = keys.size();
-  avg_err = 0;
-  err_at_percentile = 0;
-  max_err = 0;
-
-  std::vector<double> errors;
-
-  size_t records_per_group = record_n / group_n_trial;
-  size_t trailing_record_n = record_n - records_per_group * group_n_trial;
-  size_t previous_end_i = 0;
-  for (size_t group_i = 0; group_i < group_n_trial; group_i++) {
-    size_t begin_i = previous_end_i;
-    size_t end_i = previous_end_i + records_per_group;
-    end_i = end_i > record_n ? record_n : end_i;
-    if (trailing_record_n > 0) {
-      end_i++;
-      trailing_record_n--;
-    }
-    previous_end_i = end_i;
-    INVARIANT((group_i == group_n_trial - 1 && end_i == record_n) ||
-              group_i < group_n_trial - 1);
-
-    linear_model_t model;
-    model.prepare(keys.begin() + begin_i, end_i - begin_i);
-    double e = model.get_error_bound(keys.begin() + begin_i, end_i - begin_i);
-    errors.push_back(e);
-    avg_err += e;
-  }
-  avg_err /= group_n_trial;
-
-  // check whether the erros satisfy the specified performance requirement
-  std::sort(errors.begin(), errors.end());
-  err_at_percentile = errors[(size_t)(errors.size() * access_percentage)];
-  max_err = errors[errors.size() - 1];
-}
-
-/*
- * Root::get
- */
-template <class key_t, class val_t, bool seq>
-inline result_t Root<key_t, val_t, seq>::get(const key_t &key, val_t &val) {
-  return locate_group(key)->get(key, val);
+  DEBUG_THIS("------ Final XIndex Paramater: group_n="
+             << group_n << ", avg_group_size=" << keys.size() / group_n
+             << ", feature_begin_i=" << feature_begin_i
+             << ", max_feature_len=" << max_feature_len);
+  DEBUG_THIS("------ Final XIndex Errors: max_error="
+             << max_group_error
+             << ", avg_group_error=" << avg_group_error / group_n
+             << ", avg_prefix_len=" << avg_prefix_len / group_n
+             << ", avg_feature_len=" << avg_feature_len / group_n);
+  DEBUG_THIS("------ Final XIndex Memory: sizeof(root)="
+             << sizeof(*this) << ", sizeof(group_t)=" << sizeof(group_t)
+             << ", sizeof(group_t::record_t)="
+             << sizeof(typename group_t::record_t)
+             << ", sizeof(group_t::wrapped_val_t)="
+             << sizeof(typename group_t::wrapped_val_t));
 }
 
 /*
@@ -222,16 +123,16 @@ inline size_t Root<key_t, val_t, seq>::scan(
   group_t *group = locate_group_pt2(begin, locate_group_pt1(begin, group_i));
   while (remaining && group_i < (int)group_n) {
     while (remaining && group &&
-           group->get_pivot() > latest_group_pivot /* avoid re-entry */) {
+           group->pivot > latest_group_pivot /* avoid re-entry */) {
       size_t done = group->scan(next_begin, remaining, result);
       assert(done <= remaining);
       remaining -= done;
-      latest_group_pivot = group->get_pivot();
+      latest_group_pivot = group->pivot;
       next_begin = key_t::min();  // though don't know the exact begin
       group = group->next;
     }
     group_i++;
-    group = groups[group_i].second;
+    group = get_group_ptr(group_i);
   }
 
   return n - remaining;
@@ -246,7 +147,6 @@ inline size_t Root<key_t, val_t, seq>::range_scan(
 
 template <class key_t, class val_t, bool seq>
 void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
-  volatile bool &should_update_array = ((BGInfo *)args)->should_update_array;
   std::atomic<bool> &started = ((BGInfo *)args)->started;
   std::atomic<bool> &finished = ((BGInfo *)args)->finished;
   size_t bg_i = (((BGInfo *)args)->bg_i);
@@ -270,17 +170,19 @@ void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
       size_t buf_size = 0, cnt = 0;
       for (size_t group_i = begin_group_i; group_i < end_group_i; group_i++) {
         if (group_i % 50000 == 0) {
-          DEBUG_THIS("----- [structure update] doing group_i=" << group_i);
+          DEBUG_THIS("------ [structure update] doing group_i=" << group_i);
         }
 
         group_t *volatile *group = &(root.groups[group_i].second);
         while (*group != nullptr) {
+// disable model split/merge
+#if 0
           // check model split/merge
           bool should_split_group = false;
           bool might_merge_group = false;
 
-          // set this to avoid ping-pong effect
-          size_t max_trial_n = max_model_n;
+          size_t max_trial_n =
+              max_group_model_n;  // set this to avoid ping-pong effect
           for (size_t trial_i = 0; trial_i < max_trial_n; ++trial_i) {
             group_t *old_group = (*group);
 
@@ -288,14 +190,14 @@ void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
             if (seq) {
               mean_error = old_group->mean_error_est();
             } else {
-              mean_error = old_group->mean_error;
+              mean_error = old_group->get_mean_error();
             }
 
             uint16_t model_n = old_group->model_n;
             if (mean_error > config.group_error_bound) {
-              if (model_n != max_model_n) {
-                // DEBUG_THIS("------ [model split] err="
-                //  << mean_error << ", group_i=" << group_i);
+              if (model_n != max_group_model_n) {
+                // DEBUG_THIS("split model, err: " << mean_error
+                //  << ", trial_i: " << trial_i);
                 *group = old_group->split_model();
                 memory_fence();
                 rcu_barrier();
@@ -311,8 +213,8 @@ void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
             } else if (mean_error < config.group_error_bound /
                                         config.group_error_tolerance) {
               if (model_n != 1) {
-                // DEBUG_THIS("------ [model merge] err="
-                //            << mean_error << ", group_i=" << group_i);
+                // DEBUG_THIS("merge model, err: " << mean_error
+                //  << ", trial_i: " << trial_i);
                 *group = old_group->merge_model();
                 memory_fence();
                 rcu_barrier();
@@ -335,18 +237,21 @@ void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
           if ((*group)->next) {
             next_group = &((*group)->next);
           } else if (group_i != end_group_i - 1 &&
-                     root.groups[group_i + 1].second) {
+                     root.get_group_ptr(group_i + 1)) {
             next_group = &(root.groups[group_i + 1].second);
           }
+#endif
 
           // check for group split/merge, if not, do compaction
           size_t buffer_size = (*group)->buffer->size();
           buf_size += buffer_size;
           cnt++;
           group_t *old_group = (*group);
+
+// disable group split/merge
+#if 0
           if (should_split_group || buffer_size > config.buffer_size_bound) {
-            // DEBUG_THIS("------ [group split] buf_size="
-            //            << buffer_size << ", group_i=" << group_i);
+            // DEBUG_THIS("split group, buf_size: " << buffer_size);
 
             group_t *intermediate = old_group->split_group_pt1();
             *group = intermediate;  // create 2 new groups with freezed buffer
@@ -366,14 +271,14 @@ void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
             delete old_group;
             delete intermediate->next;  // but deleting the metadata is needed
             delete intermediate;
-            should_update_array = true;
+            ((BGInfo *)args)->should_update_array = true;
 
             // skip next (the split new one), to avoid ping-pong split / merge
             group = &((*group)->next);
           } else if (might_merge_group &&
-                     buffer_size < config.buffer_size_bound /
-                                       config.buffer_size_tolerance &&
-                     next_group != nullptr) {
+                  buffer_size < config.buffer_size_bound /
+                               config.buffer_size_tolerance &&
+                  next_group != nullptr) {
             if (seq == true) {
               COUT_VAR(group_i);
               COUT_VAR(begin_group_i);
@@ -382,8 +287,7 @@ void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
               COUT_VAR(next_group);
             }
 
-            // DEBUG_THIS("------ [group merge] buf_size="
-            //            << buffer_size << ", group_i=" << group_i);
+            // DEBUG_THIS("merge group, buf_size: " << buffer_size);
 
             group_t *old_next = (*next_group);
             group_t *new_group = old_group->merge_group(*old_next);
@@ -402,11 +306,10 @@ void *Root<key_t, val_t, seq>::do_adjustment(void *args) {
             old_next->free_buffer();
             delete old_group;
             delete old_next;
-            should_update_array = true;
-          } else if (buffer_size > config.buffer_compact_threshold) {
-            // DEBUG_THIS("------ [compaction], buf_size="
-            //            << buffer_size << ", group_i=" << group_i);
-
+            ((BGInfo *)args)->should_update_array = true;
+          } else
+#endif
+          if (buffer_size > config.buffer_compact_threshold) {
             group_t *new_group = old_group->compact_phase_1();
             *group = new_group;
             memory_fence();
@@ -446,7 +349,7 @@ Root<key_t, val_t, seq> *Root<key_t, val_t, seq>::create_new_root() {
 
   size_t new_group_n = 0;
   for (size_t group_i = 0; group_i < group_n; group_i++) {
-    group_t *group = groups[group_i].second;
+    group_t *group = get_group_ptr(group_i);
     while (group != nullptr) {
       new_group_n++;
       group = group->next;
@@ -461,24 +364,21 @@ Root<key_t, val_t, seq> *Root<key_t, val_t, seq>::create_new_root() {
 
   size_t new_group_i = 0;
   for (size_t group_i = 0; group_i < group_n; group_i++) {
-    group_t *group = groups[group_i].second;
+    group_t *group = get_group_ptr(group_i);
     while (group != nullptr) {
-      new_root->groups[new_group_i].first = group->get_pivot();
-      new_root->groups[new_group_i].second = group;
+      new_root->set_group_pivot(new_group_i, group->pivot);
+      new_root->set_group_ptr(new_group_i, group);
       group = group->next;
       new_group_i++;
     }
   }
 
   for (size_t group_i = 0; group_i < new_root->group_n - 1; group_i++) {
-    assert(new_root->groups[group_i].first <
-           new_root->groups[group_i + 1].first);
+    assert(new_root->get_group_pivot(group_i) <
+           new_root->get_group_pivot(group_i + 1));
   }
 
-  new_root->rmi_1st_stage = rmi_1st_stage;
-  new_root->rmi_2nd_stage = rmi_2nd_stage;
-  new_root->rmi_2nd_stage_model_n = rmi_2nd_stage_model_n;
-  new_root->adjust_rmi();
+  new_root->adjust_root_model();
 
   return new_root;
 }
@@ -486,131 +386,138 @@ Root<key_t, val_t, seq> *Root<key_t, val_t, seq>::create_new_root() {
 template <class key_t, class val_t, bool seq>
 void Root<key_t, val_t, seq>::trim_root() {
   for (size_t group_i = 0; group_i < group_n; group_i++) {
-    group_t *group = groups[group_i].second;
+    group_t *group = get_group_ptr(group_i);
     if (group_i != group_n - 1) {
-      assert(group->next ? group->next == groups[group_i + 1].second : true);
+      assert(group->next ? group->next == get_group_ptr(group_i + 1) : true);
     }
     group->next = nullptr;
   }
 }
 
 template <class key_t, class val_t, bool seq>
-void Root<key_t, val_t, seq>::adjust_rmi() {
-  size_t max_model_n = config.root_memory_constraint / sizeof(linear_model_t);
-  size_t max_trial_n = 10;
-
-  size_t model_n_trial = rmi_2nd_stage_model_n;
-  if (model_n_trial == 0) {
-    max_trial_n = 100;
-    const size_t group_n_per_model_per_rmi_error_experience_factor = 4;
-    model_n_trial = std::min(
-        max_model_n,         // do not exceed memory constraint
-        std::max((size_t)1,  // do not decrease to zero
-                 (size_t)(group_n / config.root_error_bound /
-                          group_n_per_model_per_rmi_error_experience_factor)));
-  }
-
-  train_rmi(model_n_trial);
-  size_t model_n_trial_prev_prev = 0;
-  size_t model_n_trial_prev = model_n_trial;
-
-  size_t trial_i = 0;
-  double mean_error = 0;
-  for (; trial_i < max_trial_n; trial_i++) {
-    std::vector<double> errors;
-    for (size_t group_i = 0; group_i < group_n; group_i++) {
-      errors.push_back(
-          std::abs((double)group_i - predict(groups[group_i].first)) + 1);
-    }
-    mean_error =
-        std::accumulate(errors.begin(), errors.end(), 0.0) / errors.size();
-
-    if (mean_error > config.root_error_bound) {
-      if (rmi_2nd_stage_model_n == max_model_n) {
-        break;
-      }
-      model_n_trial = std::min(
-          max_model_n,  // do not exceed memory constraint
-          std::max(rmi_2nd_stage_model_n + 1,  // but at least increase by 1
-                   (size_t)(rmi_2nd_stage_model_n * mean_error /
-                            config.root_error_bound)));
-    } else if (mean_error < config.root_error_bound / 2) {
-      if (rmi_2nd_stage_model_n == 1) {
-        break;
-      }
-      model_n_trial = std::max(
-          (size_t)1,                           // do not decrease to zero
-          std::min(rmi_2nd_stage_model_n - 1,  // but at least decrease by 1
-                   (size_t)(rmi_2nd_stage_model_n * mean_error /
-                            (config.root_error_bound / 2))));
-    } else {
-      break;
-    }
-
-    train_rmi(model_n_trial);
-    if (model_n_trial == model_n_trial_prev_prev) {
-      break;
-    }
-    model_n_trial_prev_prev = model_n_trial_prev;
-    model_n_trial_prev = model_n_trial;
-  }
-
-  DEBUG_THIS("--- [root] final rmi size: "
-             << rmi_2nd_stage_model_n << " (error=" << mean_error << "), after "
-             << trial_i << " trial(s)");
+inline result_t Root<key_t, val_t, seq>::get(const key_t &key, val_t &val) {
+  return locate_group(key)->get(key, val);
 }
 
 template <class key_t, class val_t, bool seq>
-inline void Root<key_t, val_t, seq>::train_rmi(size_t rmi_2nd_stage_model_n) {
-  this->rmi_2nd_stage_model_n = rmi_2nd_stage_model_n;
-  delete[] rmi_2nd_stage;
-  rmi_2nd_stage = new linear_model_t[rmi_2nd_stage_model_n]();
+void Root<key_t, val_t, seq>::adjust_root_model() {
+  train_piecewise_model();
 
-  // train 1st stage
-  std::vector<key_t> keys(group_n);
-  std::vector<size_t> positions(group_n);
+  std::vector<double> errors(group_n);
   for (size_t group_i = 0; group_i < group_n; group_i++) {
-    keys[group_i] = groups[group_i].first;
-    positions[group_i] = group_i;
+    errors[group_i] = std::abs(
+        (double)group_i - (double)predict(get_group_ptr(group_i)->pivot) + 1);
   }
+  double mean_error =
+      std::accumulate(errors.begin(), errors.end(), 0.0) / errors.size();
 
-  rmi_1st_stage.prepare(keys, positions);
-
-  // train 2nd stage
-  std::vector<std::vector<key_t>> keys_dispatched(rmi_2nd_stage_model_n);
-  std::vector<std::vector<size_t>> positions_dispatched(rmi_2nd_stage_model_n);
-
-  for (size_t key_i = 0; key_i < keys.size(); ++key_i) {
-    size_t group_i_pred = rmi_1st_stage.predict(keys[key_i]);
-    size_t next_stage_model_i = pick_next_stage_model(group_i_pred);
-    keys_dispatched[next_stage_model_i].push_back(keys[key_i]);
-    positions_dispatched[next_stage_model_i].push_back(positions[key_i]);
-  }
-
-  for (size_t model_i = 0; model_i < rmi_2nd_stage_model_n; ++model_i) {
-    std::vector<key_t> &keys = keys_dispatched[model_i];
-    std::vector<size_t> &positions = positions_dispatched[model_i];
-    rmi_2nd_stage[model_i].prepare(keys, positions);
-  }
-}
-
-template <class key_t, class val_t, bool seq>
-size_t Root<key_t, val_t, seq>::pick_next_stage_model(size_t group_i_pred) {
-  size_t second_stage_model_i;
-  second_stage_model_i = group_i_pred * rmi_2nd_stage_model_n / group_n;
-
-  if (second_stage_model_i >= rmi_2nd_stage_model_n) {
-    second_stage_model_i = rmi_2nd_stage_model_n - 1;
-  }
-
-  return second_stage_model_i;
+  DEBUG_THIS("------ Final XIndex Root Piecewise Model: model_n="
+             << this->root_model_n << ", error=" << mean_error);
 }
 
 template <class key_t, class val_t, bool seq>
 inline size_t Root<key_t, val_t, seq>::predict(const key_t &key) {
-  size_t pos_pred = rmi_1st_stage.predict(key);
-  size_t next_stage_model_i = pick_next_stage_model(pos_pred);
-  return rmi_2nd_stage[next_stage_model_i].predict(key);
+  uint32_t m_i = 0;
+  while (m_i < root_model_n - 1 && key >= model_pivots[m_i + 1]) {
+    m_i++;
+  }
+  uint32_t p_len = models[m_i].p_len, f_len = models[m_i].f_len;
+  double model_key[f_len];
+  key.get_model_key(p_len, f_len, model_key);
+  return model_predict(models[m_i].weights.data(), model_key, f_len);
+}
+
+template <class key_t, class val_t, bool seq>
+inline void Root<key_t, val_t, seq>::train_piecewise_model() {
+  std::vector<size_t> indexes;
+  std::vector<key_t> pivots(group_n);
+  for (size_t g_i = 0; g_i < group_n; ++g_i) {
+    pivots[g_i] = get_group_pivot(g_i);
+  }
+  grouping_by_partial_key(pivots, config.group_error_bound,
+                          config.partial_len_bound, config.forward_step,
+                          config.backward_step, config.group_min_size, indexes);
+
+  if (indexes.size() > max_root_model_n) {
+    size_t index_per_model = indexes.size() / max_root_model_n;
+    std::vector<size_t> new_indexes;
+    size_t trailing = indexes.size() - index_per_model * max_root_model_n;
+    size_t start_i = 0;
+    for (size_t i = 0; i < max_root_model_n; ++i) {
+      new_indexes.push_back(indexes[start_i]);
+      start_i += index_per_model;
+      if (trailing > 0) {
+        trailing--;
+        start_i++;
+      }
+    }
+    indexes.swap(new_indexes);
+  }
+
+  uint32_t model_n = indexes.size();
+  INVARIANT(model_n <= max_root_model_n);
+  this->root_model_n = model_n;
+  DEBUG_THIS("----- Root model n after grouping: " << model_n);
+
+  assert(indexes.size() <= model_n);
+  uint32_t p_len = 0, f_len = 0;
+  for (size_t m_i = 0; m_i < indexes.size(); ++m_i) {
+    size_t b_i = indexes[m_i];
+    size_t e_i = (m_i == indexes.size() - 1) ? group_n : indexes[m_i + 1];
+    model_pivots[m_i] = get_group_ptr(b_i)->pivot;
+    partial_key_len_of_pivots(b_i, e_i, p_len, f_len);
+    size_t m_size = e_i - b_i;
+    DEBUG_THIS("------ XIndex Root Model(" << m_i << "): size=" << m_size
+                                           << ", p_len=" << p_len
+                                           << ", f_len=" << f_len);
+    std::vector<double> m_keys(m_size * f_len);
+    std::vector<double *> m_key_ptrs(m_size);
+    std::vector<size_t> ps(m_size);
+    for (size_t k_i = 0; k_i < m_size; ++k_i) {
+      get_group_ptr(k_i + b_i)->pivot.get_model_key(
+          p_len, f_len, m_keys.data() + f_len * k_i);
+      m_key_ptrs[k_i] = m_keys.data() + f_len * k_i;
+      ps[k_i] = k_i + b_i;
+    }
+
+    for (size_t i = 0; i < key_t::model_key_size() + 1; ++i) {
+      models[m_i].weights[i] = 0;
+    }
+    models[m_i].p_len = p_len;
+    models[m_i].f_len = f_len;
+    model_prepare(m_key_ptrs, ps, models[m_i].weights.data(), f_len);
+  }
+}
+
+template <class key_t, class val_t, bool seq>
+inline void Root<key_t, val_t, seq>::partial_key_len_of_pivots(
+    const size_t start_i, const size_t end_i, uint32_t &p_len,
+    uint32_t &f_len) {
+  assert(start_i < end_i);
+  if (end_i == start_i + 1) {
+    p_len = 0;
+    f_len = 1;
+    return;
+  }
+  p_len = common_prefix_length(
+      0, (uint8_t *)&(get_group_ptr(start_i)->pivot), sizeof(key_t),
+      (uint8_t *)&(get_group_ptr(start_i + 1)->pivot), sizeof(key_t));
+  size_t max_adjacent_prefix = p_len;
+
+  for (size_t k_i = start_i + 2; k_i < end_i; ++k_i) {
+    p_len = common_prefix_length(0, (uint8_t *)&(get_group_ptr(k_i - 1)->pivot),
+                                 p_len, (uint8_t *)&(get_group_ptr(k_i)->pivot),
+                                 sizeof(key_t));
+    size_t adjacent_prefix = common_prefix_length(
+        p_len, (uint8_t *)&(get_group_ptr(k_i - 1)->pivot), sizeof(key_t),
+        (uint8_t *)&(get_group_ptr(k_i)->pivot), sizeof(key_t));
+    assert(adjacent_prefix <= sizeof(key_t) - p_len);
+    if (adjacent_prefix < sizeof(key_t) - p_len) {
+      max_adjacent_prefix =
+          std::max(max_adjacent_prefix, p_len + adjacent_prefix);
+    }
+  }
+  f_len = max_adjacent_prefix - p_len + 2;
 }
 
 /*
@@ -633,11 +540,11 @@ Root<key_t, val_t, seq>::locate_group_pt1(const key_t &key, int &group_i) {
 
   // exponential search
   int begin_group_i, end_group_i;
-  if (groups[group_i].first <= key) {
+  if (get_group_pivot(group_i) <= key) {
     size_t step = 1;
     begin_group_i = group_i;
     end_group_i = begin_group_i + step;
-    while (end_group_i < (int)group_n && groups[end_group_i].first <= key) {
+    while (end_group_i < (int)group_n && get_group_pivot(end_group_i) <= key) {
       step = step * 2;
       begin_group_i = end_group_i;
       end_group_i = begin_group_i + step;
@@ -649,7 +556,7 @@ Root<key_t, val_t, seq>::locate_group_pt1(const key_t &key, int &group_i) {
     size_t step = 1;
     end_group_i = group_i;
     begin_group_i = end_group_i - step;
-    while (begin_group_i >= 0 && groups[begin_group_i].first > key) {
+    while (begin_group_i >= 0 && get_group_pivot(begin_group_i) > key) {
       step = step * 2;
       end_group_i = begin_group_i;
       begin_group_i = end_group_i - step;
@@ -667,7 +574,7 @@ Root<key_t, val_t, seq>::locate_group_pt1(const key_t &key, int &group_i) {
     // the "+2" term actually should be a "+1" after "/2", this is due to the
     // rounding in c++ when the first operant of "/" operator is negative
     int mid = (end_group_i + begin_group_i + 2) / 2;
-    if (groups[mid].first <= key) {
+    if (get_group_pivot(mid) <= key) {
       begin_group_i = mid;
     } else {
       end_group_i = mid - 1;
@@ -676,14 +583,14 @@ Root<key_t, val_t, seq>::locate_group_pt1(const key_t &key, int &group_i) {
   // the result falls in [-1, group_n - 1]
   // now we ensure the pointer is not null
   group_i = end_group_i < 0 ? 0 : end_group_i;
-  group_t *group = groups[group_i].second;
+  group_t *group = get_group_ptr(group_i);
   while (group_i > 0 && group == nullptr) {
     group_i--;
-    group = groups[group_i].second;
+    group = get_group_ptr(group_i);
   }
   // however, we treat the pivot key of the 1st group as -inf, thus we return
   // 0 when the search result is -1
-  assert(groups[0].second != nullptr);
+  assert(get_group_ptr(0) != nullptr);
 
   return group;
 }
@@ -693,11 +600,191 @@ inline typename Root<key_t, val_t, seq>::group_t *
 Root<key_t, val_t, seq>::locate_group_pt2(const key_t &key, group_t *begin) {
   group_t *group = begin;
   group_t *next = group->next;
-  while (next != nullptr && next->get_pivot() <= key) {
+  while (next != nullptr && next->pivot <= key) {
     group = next;
     next = group->next;
   }
   return group;
+}
+
+template <class key_t, class val_t, bool seq>
+inline void Root<key_t, val_t, seq>::set_group_ptr(size_t group_i,
+                                                   group_t *g_ptr) {
+  groups[group_i].second = g_ptr;
+}
+
+template <class key_t, class val_t, bool seq>
+inline typename Root<key_t, val_t, seq>::group_t *
+Root<key_t, val_t, seq>::get_group_ptr(size_t group_i) const {
+  return groups[group_i].second;
+}
+
+template <class key_t, class val_t, bool seq>
+inline void Root<key_t, val_t, seq>::set_group_pivot(size_t group_i,
+                                                     const key_t &key) {
+  groups[group_i].first = key;
+}
+
+template <class key_t, class val_t, bool seq>
+inline key_t &Root<key_t, val_t, seq>::get_group_pivot(size_t group_i) const {
+  return groups[group_i].first;
+}
+
+template <class key_t, class val_t, bool seq>
+inline void Root<key_t, val_t, seq>::grouping_by_partial_key(
+    const std::vector<key_t> &keys, size_t et, size_t pt, size_t fstep,
+    size_t bstep, size_t min_size, std::vector<size_t> &pivot_indexes) const {
+  pivot_indexes.clear();
+  size_t start_i = 0, end_i = 0;
+  size_t common_p_len = 0, max_p_len = 0, f_len = 0;
+  double group_error = 0;
+  double avg_group_size = 0, avg_f_len = 0;
+  std::unordered_map<size_t, size_t> common_p_history;
+  std::unordered_map<size_t, size_t> max_p_history;
+
+  // prepare model keys for training
+  std::vector<double> model_keys(keys.size() * sizeof(key_t));
+  for (size_t k_i = 0; k_i < keys.size(); ++k_i) {
+    keys[k_i].get_model_key(0, sizeof(key_t),
+                            model_keys.data() + sizeof(key_t) * k_i);
+  }
+
+  while (end_i < keys.size()) {
+    common_p_len = 0;
+    max_p_len = 0;
+    f_len = 0;
+    group_error = 0;
+    common_p_history.clear();
+    max_p_history.clear();
+
+    while (f_len < pt && group_error < et) {
+      size_t pre_end_i = end_i;
+      end_i += fstep;
+      if (end_i >= keys.size()) {
+        DEBUG_THIS("[Grouping] reach end. last group size= "
+                   << (keys.size() - start_i));
+        break;
+      }
+      partial_key_len_by_step(keys, start_i, pre_end_i, end_i, common_p_len,
+                              max_p_len, common_p_history, max_p_history);
+      INVARIANT(common_p_len <= max_p_len);
+      f_len = max_p_len - common_p_len + 1;
+      if (f_len >= pt) break;
+      // group_error =
+      //     train_and_get_err(model_keys, start_i, end_i, common_p_len, f_len);
+    }
+
+    while (f_len > pt || group_error > et) {
+      if (end_i >= keys.size()) {
+        DEBUG_THIS("[Grouping] reach end. last group size= "
+                   << (keys.size() - start_i));
+        break;
+      }
+      if (end_i - start_i < min_size) {
+        end_i = start_i + min_size;
+        break;
+      }
+      end_i -= bstep;
+      partial_key_len_by_step(keys, start_i, start_i, end_i, common_p_len,
+                              max_p_len, common_p_history, max_p_history);
+      INVARIANT(common_p_len <= max_p_len);
+      f_len = max_p_len - common_p_len + 1;
+      // group_error =
+      //     train_and_get_err(model_keys, start_i, end_i, common_p_len, f_len);
+    }
+
+    assert(f_len <= pt || end_i - start_i == min_size);
+    pivot_indexes.push_back(start_i);
+    avg_group_size += (end_i - start_i);
+    avg_f_len += f_len;
+    start_i = end_i;
+
+    if (pivot_indexes.size() % 1000 == 0) {
+      DEBUG_THIS("[Grouping] current size="
+                 << pivot_indexes.size()
+                 << ", avg_group_size=" << avg_group_size / pivot_indexes.size()
+                 << ", avg_f_len=" << avg_f_len / pivot_indexes.size()
+                 << ", current_group_error=" << group_error);
+    }
+  }
+
+  DEBUG_THIS("[Grouping] group number="
+             << pivot_indexes.size()
+             << ", avg_group_size=" << avg_group_size / pivot_indexes.size()
+             << ", avg_f_len=" << avg_f_len / pivot_indexes.size());
+}
+
+template <class key_t, class val_t, bool seq>
+inline void Root<key_t, val_t, seq>::partial_key_len_by_step(
+    const std::vector<key_t> &keys, const size_t start_i,
+    const size_t step_start_i, const size_t step_end_i, size_t &common_p_len,
+    size_t &max_p_len, std::unordered_map<size_t, size_t> &common_p_history,
+    std::unordered_map<size_t, size_t> &max_p_history) const {
+  assert(start_i < step_end_i);
+
+  if (common_p_history.count(step_end_i) > 0) {
+    INVARIANT(max_p_history.count(step_end_i) > 0);
+    common_p_len = common_p_history[step_end_i];
+    max_p_len = max_p_history[step_end_i];
+    return;
+  }
+
+  size_t offset = 0;  // we set offset to 0 intentionally! if it is not the
+                      // first batch of calculate partial key length, we need to
+                      // take the last element of last batch into account.
+
+  if (step_start_i == start_i) {
+    common_p_history.clear();
+    max_p_history.clear();
+    common_p_len =
+        common_prefix_length(0, (uint8_t *)&keys[step_start_i], sizeof(key_t),
+                             (uint8_t *)&keys[step_start_i + 1], sizeof(key_t));
+    max_p_len = common_p_len;
+    common_p_history[step_start_i + 1] = common_p_len;
+    max_p_history[step_start_i + 1] = max_p_len;
+    offset = 2;
+  }
+
+  for (size_t k_i = step_start_i + offset; k_i < step_end_i; ++k_i) {
+    common_p_len =
+        common_prefix_length(0, (uint8_t *)&keys[k_i - 1], common_p_len,
+                             (uint8_t *)&keys[k_i], sizeof(key_t));
+    size_t adjacent_prefix = common_prefix_length(
+        common_p_len, (uint8_t *)&keys[k_i - 1], sizeof(key_t),
+        (uint8_t *)&keys[k_i], sizeof(key_t));
+    assert(adjacent_prefix <= sizeof(key_t) - common_p_len);
+    if (adjacent_prefix < sizeof(key_t) - common_p_len) {
+      max_p_len = std::max(max_p_len, common_p_len + adjacent_prefix);
+    }
+    common_p_history[k_i] = common_p_len;
+    max_p_history[k_i] = max_p_len;
+  }
+}
+
+template <class key_t, class val_t, bool seq>
+inline double Root<key_t, val_t, seq>::train_and_get_err(
+    std::vector<double> &model_keys, size_t start_i, size_t end_i, size_t p_len,
+    size_t f_len) const {
+  size_t key_n = end_i - start_i;
+  assert(key_n > 2);
+  std::vector<double *> model_key_ptrs(key_n);
+  std::vector<size_t> positions(key_n);
+  for (size_t k_i = 0; k_i < key_n; ++k_i) {
+    model_key_ptrs[k_i] =
+        model_keys.data() + (start_i + k_i) * sizeof(key_t) + p_len;
+    positions[k_i] = k_i;
+  }
+
+  std::vector<double> weights(f_len + 1, 0);
+  model_prepare(model_key_ptrs, positions, weights.data(), f_len);
+
+  double errors = 0;
+  for (size_t k_i = 0; k_i < key_n; ++k_i) {
+    size_t predict_i =
+        model_predict(weights.data(), model_key_ptrs[k_i], f_len);
+    errors += predict_i >= k_i ? (predict_i - k_i) : (k_i - predict_i);
+  }
+  return errors / key_n;
 }
 
 }  // namespace xindex

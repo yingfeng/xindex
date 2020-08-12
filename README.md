@@ -1,6 +1,7 @@
-# XIndex
+# SIndex
 
-XIndex is a concurrent and flexible learned index structure, which was introduced in paper "[XIndex: A Scalable Learned Index for Multicore Data Storage](https://ppopp20.sigplan.org/details/PPoPP-2020-papers/13/XIndex-A-Scalable-Learned-Index-for-Multicore-Data-Storage)".
+SIndex is a concurrent learned index optimized for string keys, which is introduced in paper "[SIndex: A Scalable Learned Index for String Keys]()".
+
 
 ## Prerequisites
 
