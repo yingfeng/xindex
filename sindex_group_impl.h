@@ -18,13 +18,13 @@
  *
  */
 
-#include "xindex_group.h"
+#include "sindex_group.h"
 #include <climits>
 
-#if !defined(XINDEX_GROUP_IMPL_H)
-#define XINDEX_GROUP_IMPL_H
+#if !defined(SINDEX_GROUP_IMPL_H)
+#define SINDEX_GROUP_IMPL_H
 
-namespace xindex {
+namespace sindex {
 
 template <class key_t, class val_t, bool seq, size_t max_model_n>
 Group<key_t, val_t, seq, max_model_n>::Group() {}
@@ -1313,6 +1313,6 @@ Group<key_t, val_t, seq, max_model_n>::ArrayRefSource::get_val() {
   return *next_val_ptr;
 }
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_GROUP_IMPL_H
+#endif  // SINDEX_GROUP_IMPL_H

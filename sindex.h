@@ -19,27 +19,27 @@
  */
 
 #include "helper.h"
-#include "xindex_buffer.h"
-#include "xindex_group.h"
-#include "xindex_model.h"
-#include "xindex_root.h"
-#include "xindex_util.h"
+#include "sindex_buffer.h"
+#include "sindex_group.h"
+#include "sindex_model.h"
+#include "sindex_root.h"
+#include "sindex_util.h"
 
-#if !defined(XINDEX_H)
-#define XINDEX_H
+#if !defined(SINDEX_H)
+#define SINDEX_H
 
-namespace xindex {
+namespace sindex {
 
 template <class key_t, class val_t, bool seq = false>
-class XIndex {
+class SIndex {
   typedef Group<key_t, val_t, seq> group_t;
   typedef Root<key_t, val_t, seq> root_t;
   typedef void iterator_t;
 
  public:
-  XIndex(const std::vector<key_t> &keys, const std::vector<val_t> &vals,
+  SIndex(const std::vector<key_t> &keys, const std::vector<val_t> &vals,
          size_t worker_num, size_t bg_n);
-  ~XIndex();
+  ~SIndex();
 
   inline bool get(const key_t &key, val_t &val, const uint32_t worker_id);
   inline bool put(const key_t &key, const val_t &val, const uint32_t worker_id);
@@ -63,6 +63,6 @@ class XIndex {
   volatile bool bg_running = true;
 };
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_H
+#endif  // SINDEX_H

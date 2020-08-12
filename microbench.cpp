@@ -31,8 +31,8 @@
 #include <vector>
 
 #include "helper.h"
-#include "xindex.h"
-#include "xindex_impl.h"
+#include "sindex.h"
+#include "sindex_impl.h"
 
 struct alignas(CACHELINE_SIZE) FGParam;
 template <size_t len>
@@ -40,11 +40,11 @@ class StrKey;
 
 typedef FGParam fg_param_t;
 typedef StrKey<64> index_key_t;
-typedef xindex::XIndex<index_key_t, uint64_t> xindex_t;
+typedef sindex::SIndex<index_key_t, uint64_t> sindex_t;
 
-inline void prepare_xindex(xindex_t *&table);
+inline void prepare_sindex(sindex_t *&table);
 
-void run_benchmark(xindex_t *table, size_t sec);
+void run_benchmark(sindex_t *table, size_t sec);
 
 void *run_fg(void *param);
 
@@ -67,7 +67,7 @@ std::vector<index_key_t> exist_keys;
 std::vector<index_key_t> non_exist_keys;
 
 struct alignas(CACHELINE_SIZE) FGParam {
-  xindex_t *table;
+  sindex_t *table;
   uint64_t throughput;
   uint32_t thread_id;
 };
@@ -153,13 +153,13 @@ class StrKey {
 
 int main(int argc, char **argv) {
   parse_args(argc, argv);
-  xindex_t *tab_xi;
-  prepare_xindex(tab_xi);
+  sindex_t *tab_xi;
+  prepare_sindex(tab_xi);
   run_benchmark(tab_xi, runtime);
   if (tab_xi != nullptr) delete tab_xi;
 }
 
-inline void prepare_xindex(xindex_t *&table) {
+inline void prepare_sindex(sindex_t *&table) {
   // prepare data
   std::random_device rd;
   std::mt19937 gen(rd());
@@ -189,16 +189,16 @@ inline void prepare_xindex(xindex_t *&table) {
   COUT_VAR(exist_keys.size());
   COUT_VAR(non_exist_keys.size());
 
-  // initilize XIndex (sort keys first)
+  // initilize SIndex (sort keys first)
   std::sort(exist_keys.begin(), exist_keys.end());
   std::vector<uint64_t> vals(exist_keys.size(), 1);
-  table = new xindex_t(exist_keys, vals, fg_n, bg_n);
+  table = new sindex_t(exist_keys, vals, fg_n, bg_n);
 }
 
 void *run_fg(void *param) {
   fg_param_t &thread_param = *(fg_param_t *)param;
   uint32_t thread_id = thread_param.thread_id;
-  xindex_t *table = thread_param.table;
+  sindex_t *table = thread_param.table;
 
   std::random_device rd;
   std::mt19937 gen(rd());
@@ -273,7 +273,7 @@ void *run_fg(void *param) {
   pthread_exit(nullptr);
 }
 
-void run_benchmark(xindex_t *table, size_t sec) {
+void run_benchmark(sindex_t *table, size_t sec) {
   pthread_t threads[fg_n];
   fg_param_t fg_params[fg_n];
   // check if parameters are cacheline aligned
@@ -339,17 +339,17 @@ inline void parse_args(int argc, char **argv) {
       {"runtime", required_argument, 0, 'g'},
       {"fg", required_argument, 0, 'h'},
       {"bg", required_argument, 0, 'i'},
-      {"xindex-root-err-bound", required_argument, 0, 'j'},
-      {"xindex-root-memory", required_argument, 0, 'k'},
-      {"xindex-group-err-bound", required_argument, 0, 'l'},
-      {"xindex-group-err-tolerance", required_argument, 0, 'm'},
-      {"xindex-buf-size-bound", required_argument, 0, 'n'},
-      {"xindex-buf-compact-threshold", required_argument, 0, 'o'},
-      {"xindex-partial-len", required_argument, 0, 'p'},
-      {"xindex-forward-step", required_argument, 0, 'q'},
-      {"xindex-backward-step", required_argument, 0, 'r'},
+      {"sindex-root-err-bound", required_argument, 0, 'j'},
+      {"sindex-root-memory", required_argument, 0, 'k'},
+      {"sindex-group-err-bound", required_argument, 0, 'l'},
+      {"sindex-group-err-tolerance", required_argument, 0, 'm'},
+      {"sindex-buf-size-bound", required_argument, 0, 'n'},
+      {"sindex-buf-compact-threshold", required_argument, 0, 'o'},
+      {"sindex-partial-len", required_argument, 0, 'p'},
+      {"sindex-forward-step", required_argument, 0, 'q'},
+      {"sindex-backward-step", required_argument, 0, 'r'},
       {0, 0, 0, 0}};
-  std::string ops = "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:";
+  std::string ops = "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:";
   int option_index = 0;
 
   while (1) {
@@ -397,41 +397,41 @@ inline void parse_args(int argc, char **argv) {
         bg_n = strtoul(optarg, NULL, 10);
         break;
       case 'j':
-        xindex::config.root_error_bound = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.root_error_bound > 0);
+        sindex::config.root_error_bound = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.root_error_bound > 0);
         break;
       case 'k':
-        xindex::config.root_memory_constraint =
+        sindex::config.root_memory_constraint =
             strtol(optarg, NULL, 10) * 1024 * 1024;
-        INVARIANT(xindex::config.root_memory_constraint > 0);
+        INVARIANT(sindex::config.root_memory_constraint > 0);
         break;
       case 'l':
-        xindex::config.group_error_bound = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.group_error_bound > 0);
+        sindex::config.group_error_bound = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.group_error_bound > 0);
         break;
       case 'm':
-        xindex::config.group_error_tolerance = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.group_error_tolerance > 0);
+        sindex::config.group_error_tolerance = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.group_error_tolerance > 0);
         break;
       case 'n':
-        xindex::config.buffer_size_bound = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.buffer_size_bound > 0);
+        sindex::config.buffer_size_bound = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.buffer_size_bound > 0);
         break;
       case 'o':
-        xindex::config.buffer_compact_threshold = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.buffer_compact_threshold > 0);
+        sindex::config.buffer_compact_threshold = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.buffer_compact_threshold > 0);
         break;
       case 'p':
-        xindex::config.partial_len_bound = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.partial_len_bound > 0);
+        sindex::config.partial_len_bound = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.partial_len_bound > 0);
         break;
       case 'q':
-        xindex::config.forward_step = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.forward_step > 0);
+        sindex::config.forward_step = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.forward_step > 0);
         break;
       case 'r':
-        xindex::config.backward_step = strtol(optarg, NULL, 10);
-        INVARIANT(xindex::config.backward_step > 0);
+        sindex::config.backward_step = strtol(optarg, NULL, 10);
+        INVARIANT(sindex::config.backward_step > 0);
         break;
 
       default:
@@ -448,14 +448,14 @@ inline void parse_args(int argc, char **argv) {
   COUT_VAR(runtime);
   COUT_VAR(fg_n);
   COUT_VAR(bg_n);
-  COUT_VAR(xindex::config.root_error_bound);
-  COUT_VAR(xindex::config.root_memory_constraint);
-  COUT_VAR(xindex::config.group_error_bound);
-  COUT_VAR(xindex::config.group_error_tolerance);
-  COUT_VAR(xindex::config.buffer_size_bound);
-  COUT_VAR(xindex::config.buffer_size_tolerance);
-  COUT_VAR(xindex::config.buffer_compact_threshold);
-  COUT_VAR(xindex::config.partial_len_bound);
-  COUT_VAR(xindex::config.forward_step);
-  COUT_VAR(xindex::config.backward_step);
+  COUT_VAR(sindex::config.root_error_bound);
+  COUT_VAR(sindex::config.root_memory_constraint);
+  COUT_VAR(sindex::config.group_error_bound);
+  COUT_VAR(sindex::config.group_error_tolerance);
+  COUT_VAR(sindex::config.buffer_size_bound);
+  COUT_VAR(sindex::config.buffer_size_tolerance);
+  COUT_VAR(sindex::config.buffer_compact_threshold);
+  COUT_VAR(sindex::config.partial_len_bound);
+  COUT_VAR(sindex::config.forward_step);
+  COUT_VAR(sindex::config.backward_step);
 }

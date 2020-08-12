@@ -24,10 +24,10 @@
 #include <memory>
 #include <mutex>
 
-#if !defined(XINDEX_UTIL_H)
-#define XINDEX_UTIL_H
+#if !defined(SINDEX_UTIL_H)
+#define SINDEX_UTIL_H
 
-namespace xindex {
+namespace sindex {
 
 static const size_t desired_training_key_n = 10000000;
 static const size_t max_model_n = 4;
@@ -324,6 +324,6 @@ struct AtomicVal {
   }
 };
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_UTIL_H
+#endif  // SINDEX_UTIL_H

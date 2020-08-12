@@ -18,12 +18,12 @@
  *
  */
 
-#include "xindex_util.h"
+#include "sindex_util.h"
 
-#if !defined(XINDEX_BUFFER_H)
-#define XINDEX_BUFFER_H
+#if !defined(SINDEX_BUFFER_H)
+#define SINDEX_BUFFER_H
 
-namespace xindex {
+namespace sindex {
 
 const uint8_t alt_buf_fanout = 16;
 const uint8_t node_capacity = alt_buf_fanout - 1;
@@ -169,6 +169,6 @@ class AltBtreeBuffer {
   static const size_t node_size = std::max(sizeof(leaf_t), sizeof(internal_t));
 };
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_BUFFER_H
+#endif  // SINDEX_BUFFER_H

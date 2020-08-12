@@ -18,19 +18,19 @@
  *
  */
 
-#include "xindex.h"
-#include "xindex_buffer_impl.h"
-#include "xindex_group_impl.h"
-#include "xindex_model.h"
-#include "xindex_root_impl.h"
+#include "sindex.h"
+#include "sindex_buffer_impl.h"
+#include "sindex_group_impl.h"
+#include "sindex_model.h"
+#include "sindex_root_impl.h"
 
-#if !defined(XINDEX_IMPL_H)
-#define XINDEX_IMPL_H
+#if !defined(SINDEX_IMPL_H)
+#define SINDEX_IMPL_H
 
-namespace xindex {
+namespace sindex {
 
 template <class key_t, class val_t, bool seq>
-XIndex<key_t, val_t, seq>::XIndex(const std::vector<key_t> &keys,
+SIndex<key_t, val_t, seq>::SIndex(const std::vector<key_t> &keys,
                                   const std::vector<val_t> &vals,
                                   size_t worker_num, size_t bg_n)
     : bg_num(bg_n) {
@@ -57,19 +57,19 @@ XIndex<key_t, val_t, seq>::XIndex(const std::vector<key_t> &keys,
 }
 
 template <class key_t, class val_t, bool seq>
-XIndex<key_t, val_t, seq>::~XIndex() {
+SIndex<key_t, val_t, seq>::~SIndex() {
   terminate_bg();
 }
 
 template <class key_t, class val_t, bool seq>
-inline bool XIndex<key_t, val_t, seq>::get(const key_t &key, val_t &val,
+inline bool SIndex<key_t, val_t, seq>::get(const key_t &key, val_t &val,
                                            const uint32_t worker_id) {
   rcu_progress(worker_id);
   return root->get(key, val) == result_t::ok;
 }
 
 template <class key_t, class val_t, bool seq>
-inline bool XIndex<key_t, val_t, seq>::put(const key_t &key, const val_t &val,
+inline bool SIndex<key_t, val_t, seq>::put(const key_t &key, const val_t &val,
                                            const uint32_t worker_id) {
   result_t res;
   rcu_progress(worker_id);
@@ -80,14 +80,14 @@ inline bool XIndex<key_t, val_t, seq>::put(const key_t &key, const val_t &val,
 }
 
 template <class key_t, class val_t, bool seq>
-inline bool XIndex<key_t, val_t, seq>::remove(const key_t &key,
+inline bool SIndex<key_t, val_t, seq>::remove(const key_t &key,
                                               const uint32_t worker_id) {
   rcu_progress(worker_id);
   return root->remove(key) == result_t::ok;
 }
 
 template <class key_t, class val_t, bool seq>
-inline size_t XIndex<key_t, val_t, seq>::scan(
+inline size_t SIndex<key_t, val_t, seq>::scan(
     const key_t &begin, const size_t n,
     std::vector<std::pair<key_t, val_t>> &result, const uint32_t worker_id) {
   rcu_progress(worker_id);
@@ -95,7 +95,7 @@ inline size_t XIndex<key_t, val_t, seq>::scan(
 }
 
 template <class key_t, class val_t, bool seq>
-size_t XIndex<key_t, val_t, seq>::range_scan(
+size_t SIndex<key_t, val_t, seq>::range_scan(
     const key_t &begin, const key_t &end,
     std::vector<std::pair<key_t, val_t>> &result, const uint32_t worker_id) {
   rcu_progress(worker_id);
@@ -103,8 +103,8 @@ size_t XIndex<key_t, val_t, seq>::range_scan(
 }
 
 template <class key_t, class val_t, bool seq>
-void *XIndex<key_t, val_t, seq>::background(void *this_) {
-  volatile XIndex &index = *(XIndex *)this_;
+void *SIndex<key_t, val_t, seq>::background(void *this_) {
+  volatile SIndex &index = *(SIndex *)this_;
   if (index.bg_num == 0) return nullptr;
 
   size_t bg_num = index.bg_num;
@@ -204,7 +204,7 @@ void *XIndex<key_t, val_t, seq>::background(void *this_) {
 }
 
 template <class key_t, class val_t, bool seq>
-void XIndex<key_t, val_t, seq>::start_bg() {
+void SIndex<key_t, val_t, seq>::start_bg() {
   bg_running = true;
   int ret = pthread_create(&bg_master, nullptr, background, this);
   if (ret) {
@@ -213,11 +213,11 @@ void XIndex<key_t, val_t, seq>::start_bg() {
 }
 
 template <class key_t, class val_t, bool seq>
-void XIndex<key_t, val_t, seq>::terminate_bg() {
+void SIndex<key_t, val_t, seq>::terminate_bg() {
   config.exited = true;
   bg_running = false;
 }
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_IMPL_H
+#endif  // SINDEX_IMPL_H

@@ -45,7 +45,7 @@ set(JEMALLOC_DIR "/usr/lib/x86_64-linux-gnu")
 
 ## Build and Run
 
-We use CMake to build XIndex.
+We use CMake to build SIndex.
 
 ```shell
 $ cmake . -DCMAKE_BUILD_TYPE=Release  # or -DCMAKE_BUILD_TYPE=Debug for more debug information
@@ -58,7 +58,7 @@ To run the microbenchmark:
 $ ./microbench
 ```
 
-The [microbench](microbench.cpp) has several parameters you can pass, such as `read/write ratio`, `table size` and configurations of XIndex.
+The [microbench](microbench.cpp) has several parameters you can pass, such as `read/write ratio`, `table size` and configurations of SIndex.
 
 ```shell
 $ ./microbench --read 0.9 --insert 0.05 --remove 0.05 --table-size 100000

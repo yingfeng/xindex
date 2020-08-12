@@ -19,12 +19,12 @@
  */
 #include <unordered_map>
 
-#include "xindex_root.h"
+#include "sindex_root.h"
 
-#if !defined(XINDEX_ROOT_IMPL_H)
-#define XINDEX_ROOT_IMPL_H
+#if !defined(SINDEX_ROOT_IMPL_H)
+#define SINDEX_ROOT_IMPL_H
 
-namespace xindex {
+namespace sindex {
 
 template <class key_t, class val_t, bool seq>
 Root<key_t, val_t, seq>::~Root() {}
@@ -75,16 +75,16 @@ void Root<key_t, val_t, seq>::init(const std::vector<key_t> &keys,
   // then decide # of 2nd stage model of root RMI
   adjust_root_model();
 
-  DEBUG_THIS("------ Final XIndex Paramater: group_n="
+  DEBUG_THIS("------ Final SIndex Paramater: group_n="
              << group_n << ", avg_group_size=" << keys.size() / group_n
              << ", feature_begin_i=" << feature_begin_i
              << ", max_feature_len=" << max_feature_len);
-  DEBUG_THIS("------ Final XIndex Errors: max_error="
+  DEBUG_THIS("------ Final SIndex Errors: max_error="
              << max_group_error
              << ", avg_group_error=" << avg_group_error / group_n
              << ", avg_prefix_len=" << avg_prefix_len / group_n
              << ", avg_feature_len=" << avg_feature_len / group_n);
-  DEBUG_THIS("------ Final XIndex Memory: sizeof(root)="
+  DEBUG_THIS("------ Final SIndex Memory: sizeof(root)="
              << sizeof(*this) << ", sizeof(group_t)=" << sizeof(group_t)
              << ", sizeof(group_t::record_t)="
              << sizeof(typename group_t::record_t)
@@ -411,7 +411,7 @@ void Root<key_t, val_t, seq>::adjust_root_model() {
   double mean_error =
       std::accumulate(errors.begin(), errors.end(), 0.0) / errors.size();
 
-  DEBUG_THIS("------ Final XIndex Root Piecewise Model: model_n="
+  DEBUG_THIS("------ Final SIndex Root Piecewise Model: model_n="
              << this->root_model_n << ", error=" << mean_error);
 }
 
@@ -467,7 +467,7 @@ inline void Root<key_t, val_t, seq>::train_piecewise_model() {
     model_pivots[m_i] = get_group_ptr(b_i)->pivot;
     partial_key_len_of_pivots(b_i, e_i, p_len, f_len);
     size_t m_size = e_i - b_i;
-    DEBUG_THIS("------ XIndex Root Model(" << m_i << "): size=" << m_size
+    DEBUG_THIS("------ SIndex Root Model(" << m_i << "): size=" << m_size
                                            << ", p_len=" << p_len
                                            << ", f_len=" << f_len);
     std::vector<double> m_keys(m_size * f_len);
@@ -787,6 +787,6 @@ inline double Root<key_t, val_t, seq>::train_and_get_err(
   return errors / key_n;
 }
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_ROOT_IMPL_H
+#endif  // SINDEX_ROOT_IMPL_H

@@ -21,10 +21,10 @@
 #include "mkl.h"
 #include "mkl_lapacke.h"
 
-#if !defined(XINDEX_MODEL_H)
-#define XINDEX_MODEL_H
+#if !defined(SINDEX_MODEL_H)
+#define SINDEX_MODEL_H
 
-namespace xindex {
+namespace sindex {
 
 static const size_t DESIRED_TRAINING_KEY_N = 10000000;
 
@@ -128,6 +128,6 @@ inline size_t model_predict(double *weights, const double *model_key,
   }
 }
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_MODEL_H
+#endif  // SINDEX_MODEL_H

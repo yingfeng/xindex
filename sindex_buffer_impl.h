@@ -22,12 +22,12 @@
 #include <mutex>
 #include <vector>
 
-#include "xindex_buffer.h"
+#include "sindex_buffer.h"
 
-#if !defined(XINDEX_BUFFER_ALT_IMPL_H)
-#define XINDEX_BUFFER_ALT_IMPL_H
+#if !defined(SINDEX_BUFFER_ALT_IMPL_H)
+#define SINDEX_BUFFER_ALT_IMPL_H
 
-namespace xindex {
+namespace sindex {
 
 template <class key_t, class val_t>
 AltBtreeBuffer<key_t, val_t>::AltBtreeBuffer() {
@@ -848,6 +848,6 @@ AltBtreeBuffer<key_t, val_t>::RefSource::get_val() {
   return *(val_ptrs[pos]);
 }
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_BUFFER_IMPL_H
+#endif  // SINDEX_BUFFER_IMPL_H

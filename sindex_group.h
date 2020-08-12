@@ -16,18 +16,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * For more about XIndex, visit:
- *     https://ppopp20.sigplan.org/details/PPoPP-2020-papers/13/XIndex-A-Scalable-Learned-Index-for-Multicore-Data-Storage
  */
 
-#include "xindex_buffer.h"
-#include "xindex_model.h"
-#include "xindex_util.h"
+#include "sindex_buffer.h"
+#include "sindex_model.h"
+#include "sindex_util.h"
 
-#if !defined(XINDEX_GROUP_H)
-#define XINDEX_GROUP_H
+#if !defined(SINDEX_GROUP_H)
+#define SINDEX_GROUP_H
 
-namespace xindex {
+namespace sindex {
 
 template <class key_t, class val_t, bool seq, size_t max_model_n = 4>
 class alignas(CACHELINE_SIZE) Group {
@@ -38,7 +36,7 @@ class alignas(CACHELINE_SIZE) Group {
   typedef std::pair<key_t, wrapped_val_t> record_t;
 
   template <class key_tt, class val_tt, bool sequential>
-  friend class XIndex;
+  friend class SIndex;
   template <class key_tt, class val_tt, bool sequential>
   friend class Root;
 
@@ -193,6 +191,6 @@ class alignas(CACHELINE_SIZE) Group {
       model_info;
 };
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_GROUP_H
+#endif  // SINDEX_GROUP_H

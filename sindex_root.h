@@ -18,13 +18,13 @@
  *
  */
 
-#include "xindex_group.h"
+#include "sindex_group.h"
 #include <unordered_map>
 
-#if !defined(XINDEX_ROOT_H)
-#define XINDEX_ROOT_H
+#if !defined(SINDEX_ROOT_H)
+#define SINDEX_ROOT_H
 
-namespace xindex {
+namespace sindex {
 
 template <class key_t, class val_t, bool seq>
 class Root {
@@ -33,7 +33,7 @@ class Root {
   typedef PartialModelMeta model_meta_t;
 
   template <class key_tt, class val_tt, bool sequential>
-  friend class XIndex;
+  friend class SIndex;
 
   struct PartialModelMeta {
     uint32_t p_len;
@@ -99,6 +99,6 @@ class Root {
   std::array<model_meta_t, max_root_model_n> models;
 };
 
-}  // namespace xindex
+}  // namespace sindex
 
-#endif  // XINDEX_ROOT_H
+#endif  // SINDEX_ROOT_H
