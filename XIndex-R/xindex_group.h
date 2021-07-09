@@ -171,6 +171,12 @@ class alignas(CACHELINE_SIZE) Group {
   double mean_error;
   int32_t capacity = 0;       // used for seqential insertion
   volatile uint8_t lock = 0;  // used for seqential insertion
+
+#ifdef DEBUGGING
+  // used to ignore first group's pivot value (which should be considered zero)
+  // for debug assertions.
+  uint8_t is_first = 0;
+#endif
 };
 
 }  // namespace xindex

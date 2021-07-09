@@ -89,6 +89,9 @@ inline result_t Group<key_t, val_t, seq, max_model_n>::get(const key_t &key,
 template <class key_t, class val_t, bool seq, size_t max_model_n>
 inline result_t Group<key_t, val_t, seq, max_model_n>::put(
     const key_t &key, const val_t &val, const uint32_t worker_id) {
+#ifdef DEBUGGING
+  assert(is_first || key >= pivot);
+#endif
   result_t res;
   res = update_to_array(key, val, worker_id);
   if (res == result_t::ok || res == result_t::retry) {
@@ -206,6 +209,10 @@ Group<key_t, val_t, seq, max_model_n>
   new_group->buffer = buffer;
   new_group->buffer_temp = buffer_temp;
   new_group->next = next;
+#ifdef DEBUGGING
+  new_group->is_first = is_first;
+  assert(is_first || new_group->data[0].first >= new_group->pivot);
+#endif
 
   return new_group;
 }
@@ -229,6 +236,9 @@ Group<key_t, val_t, seq, max_model_n>
   new_group->buffer = buffer;
   new_group->buffer_temp = buffer_temp;
   new_group->next = next;
+#ifdef DEBUGGING
+  new_group->is_first = is_first;
+#endif
 
   return new_group;
 }
@@ -245,7 +255,9 @@ Group<key_t, val_t, seq, max_model_n>
 
   new_group_1->pivot = pivot;
   new_group_2->pivot = data[array_size / 2].first;
-  assert(new_group_2->pivot > new_group_1->pivot);
+#ifdef DEBUGGING
+  assert(is_first || new_group_2->pivot > new_group_1->pivot);
+#endif
   new_group_1->data = data;
   new_group_2->data = data;
   new_group_1->array_size = array_size;
@@ -263,6 +275,10 @@ Group<key_t, val_t, seq, max_model_n>
   new_group_2->buffer_temp = new buffer_t();
   new_group_1->next = new_group_2;
   new_group_2->next = next;
+#ifdef DEBUGGING
+  new_group_1->is_first = is_first;
+  assert(is_first || new_group_1->data[0].first >= new_group_1->pivot);
+#endif
 
   return new_group_1;
 }
@@ -292,6 +308,11 @@ Group<key_t, val_t, seq, max_model_n>
   new_group_2->buffer = next->buffer_temp;
   new_group_1->next = new_group_2;
   new_group_2->next = next->next;
+#ifdef DEBUGGING
+  new_group_1->is_first = is_first;
+  assert(is_first || new_group_1->data[0].first >= new_group_1->pivot);
+  assert(new_group_2->data[0].first >= new_group_2->pivot);
+#endif
 
   return new_group_1;
 }
@@ -328,6 +349,9 @@ Group<key_t, val_t, seq, max_model_n>
   new_group->init_models(new_group->model_n);
   new_group->buffer = buffer_temp;
   new_group->next = next_group.next;
+#ifdef DEBUGGING
+  new_group->is_first = is_first;
+#endif
 
   return new_group;
 }
@@ -355,6 +379,9 @@ Group<key_t, val_t, seq, max_model_n>
   new_group->init_models(model_n);
   new_group->buffer = buffer_temp;
   new_group->next = next;
+#ifdef DEBUGGING
+  new_group->is_first = is_first;
+#endif
 
   return new_group;
 }

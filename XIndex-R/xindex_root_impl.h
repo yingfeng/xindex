@@ -130,6 +130,9 @@ void Root<key_t, val_t, seq>::init(const std::vector<key_t> &keys,
                                  end_i - begin_i);
   }
 
+#ifdef DEBUGGING
+  groups[0].second->is_first = 1;
+#endif
   // then decide # of 2nd stage model of root RMI
   adjust_rmi();
 
@@ -470,7 +473,7 @@ Root<key_t, val_t, seq> *Root<key_t, val_t, seq>::create_new_root() {
     }
   }
 
-  for (size_t group_i = 0; group_i < new_root->group_n - 1; group_i++) {
+  for (size_t group_i = 1; group_i < new_root->group_n - 1; group_i++) {
     assert(new_root->groups[group_i].first <
            new_root->groups[group_i + 1].first);
   }
@@ -684,7 +687,9 @@ Root<key_t, val_t, seq>::locate_group_pt1(const key_t &key, int &group_i) {
   // however, we treat the pivot key of the 1st group as -inf, thus we return
   // 0 when the search result is -1
   assert(groups[0].second != nullptr);
-
+#ifdef DEBUGGING
+  assert(group->is_first || key >= group->pivot);
+#endif
   return group;
 }
 
@@ -697,6 +702,9 @@ Root<key_t, val_t, seq>::locate_group_pt2(const key_t &key, group_t *begin) {
     group = next;
     next = group->next;
   }
+#ifdef DEBUGGING
+  assert(group->is_first || key >= group->pivot);
+#endif
   return group;
 }
 
