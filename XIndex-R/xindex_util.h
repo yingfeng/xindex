@@ -69,7 +69,7 @@ struct IndexConfig {
   size_t buffer_compact_threshold = 8;
   size_t worker_n = 0;
   std::unique_ptr<rcu_status_t[]> rcu_status;
-  volatile bool exited = true;
+  volatile bool exited = false;
 };
 
 index_config_t config;
